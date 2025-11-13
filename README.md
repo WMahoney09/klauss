@@ -391,12 +391,36 @@ Workers send heartbeats every 5 seconds. Stale tasks (from dead workers) are aut
 
 ### Custom Database Location
 
-All scripts accept a database path:
+**Recommended: Use the KLAUSS_DB_PATH environment variable**
+
+```bash
+# Set for current session
+export KLAUSS_DB_PATH=/path/to/your/project/claude_tasks.db
+
+# Now all Klauss commands will use this database
+./manage.sh start 4
+./manage.sh stats
+python orchestrator.py  # Will also use the same database
+
+# Or set in your shell profile (~/.bashrc or ~/.zshrc) for persistence:
+echo 'export KLAUSS_DB_PATH=/path/to/project/claude_tasks.db' >> ~/.zshrc
+```
+
+All scripts will automatically check for `KLAUSS_DB_PATH` and use it if set.
+
+**Alternative: Pass database path explicitly to each script**
+
 ```bash
 python claude_coordinator.py 4 /tmp/my_queue.db
 python submit_task.py --db /tmp/my_queue.db submit "Task"
 python claude_dashboard.py /tmp/my_queue.db
 ```
+
+**Path Resolution Priority:**
+1. Explicit path argument (if provided)
+2. `KLAUSS_DB_PATH` environment variable
+3. Project-specific auto-detection based on project name
+4. Default: `claude_tasks.db` in current directory
 
 ### Running a Single Worker
 
@@ -479,9 +503,21 @@ rm claude_tasks.db
 ## Troubleshooting
 
 **Workers not claiming tasks:**
+- **Check database path consistency** - This is the most common issue!
+  ```bash
+  # Find all database files
+  find . -name "*.db" -ls
+
+  # Check what database workers are using (look in worker logs)
+  cat logs/worker_1.log | grep "Database:"
+
+  # Set KLAUSS_DB_PATH to ensure consistency
+  export KLAUSS_DB_PATH=/full/path/to/your/project/claude_tasks.db
+  ```
 - Check that workers are running: `ps aux | grep claude_worker`
 - Check worker logs in `logs/worker_*.log`
 - Verify database exists and is accessible
+- Ensure orchestrator and workers use the same database path
 
 **Tasks stuck in "claimed" state:**
 - Workers may have crashed without updating status

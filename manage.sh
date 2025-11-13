@@ -2,7 +2,16 @@
 # Management script for Claude Code Parallel Orchestrator
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DB_PATH="$SCRIPT_DIR/claude_tasks.db"
+
+# Determine database path with proper precedence:
+# 1. KLAUSS_DB_PATH environment variable (highest priority)
+# 2. Default to claude_tasks.db in script directory
+if [ -n "$KLAUSS_DB_PATH" ]; then
+    DB_PATH="$KLAUSS_DB_PATH"
+    echo "📁 Using database from KLAUSS_DB_PATH: $DB_PATH"
+else
+    DB_PATH="$SCRIPT_DIR/claude_tasks.db"
+fi
 
 show_help() {
     cat << EOF

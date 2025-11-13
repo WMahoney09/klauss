@@ -67,8 +67,18 @@ class ClaudeCoordinator:
     def start(self):
         """Start all workers"""
         print(f"Starting {self.num_workers} Claude Code workers...")
-        print(f"Database: {self.db_path}")
-        print(f"Logs will be written to: logs/worker_*.log")
+        print(f"📁 Database: {self.db_path}")
+
+        # Verify database exists
+        db_path = Path(self.db_path)
+        if not db_path.exists():
+            print(f"⚠️  Warning: Database file does not exist: {self.db_path}")
+            print(f"    Make sure the orchestrator has created tasks in this database")
+        else:
+            db_size = db_path.stat().st_size
+            print(f"    Database size: {db_size} bytes")
+
+        print(f"📝 Logs will be written to: logs/worker_*.log")
         print()
 
         # Cleanup stale tasks from previous runs
@@ -169,7 +179,18 @@ class ClaudeCoordinator:
 
 if __name__ == '__main__':
     num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4
-    db_path = sys.argv[2] if len(sys.argv) > 2 else "claude_tasks.db"
+
+    # Determine database path with proper precedence:
+    # 1. Explicit argument (highest priority)
+    # 2. KLAUSS_DB_PATH environment variable
+    # 3. Default to "claude_tasks.db"
+    if len(sys.argv) > 2:
+        db_path = sys.argv[2]
+    elif 'KLAUSS_DB_PATH' in os.environ:
+        db_path = os.environ['KLAUSS_DB_PATH']
+        print(f"Using database from KLAUSS_DB_PATH: {db_path}")
+    else:
+        db_path = "claude_tasks.db"
 
     print("=" * 60)
     print("Claude Code Parallel Task Coordinator")

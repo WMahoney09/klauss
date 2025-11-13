@@ -228,15 +228,23 @@ class Config:
         if config.project.name == "auto-detect" and project_root:
             config.project.name = project_root.name
 
-        # Resolve database path
+        # Resolve database path with proper precedence:
+        # 1. Explicit config setting (highest priority)
+        # 2. KLAUSS_DB_PATH environment variable
+        # 3. Auto-detected path based on project
         if config.database.path is None:
-            # Auto-generate: {project_name}_claude_tasks.db in klauss/
-            if klauss_dir:
-                db_filename = f"{config.project.name}_claude_tasks.db"
-                config.database.path = str(klauss_dir / db_filename)
+            # Check environment variable first
+            env_db_path = os.environ.get('KLAUSS_DB_PATH')
+            if env_db_path:
+                config.database.path = env_db_path
             else:
-                # Fallback if klauss not found
-                config.database.path = "claude_tasks.db"
+                # Auto-generate: {project_name}_claude_tasks.db in project root
+                if project_root:
+                    db_filename = f"{config.project.name}_claude_tasks.db"
+                    config.database.path = str(project_root / db_filename)
+                else:
+                    # Fallback if no project root found
+                    config.database.path = "claude_tasks.db"
 
         return config
 
