@@ -17,9 +17,11 @@ cd your-project
 git submodule add https://github.com/yourusername/klauss.git klauss
 git submodule update --init --recursive
 
-# Install TOML parser (required) for reading config
-pip3 install tomli
+# Install dependencies
+pip3 install -r klauss/requirements.txt
 ```
+
+That's it! The requirements.txt includes tomli (TOML parser) for Python <3.11, or uses the built-in parser for Python 3.11+.
 
 ### 2. Talk to Claude Code
 

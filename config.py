@@ -25,7 +25,13 @@ except ImportError:
                 def load(f):
                     return tomllib_compat.load(f)
         except ImportError:
-            print("Error: No TOML library found. Please install: pip install tomli", file=sys.stderr)
+            print("Error: No TOML library found.", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Please install dependencies:", file=sys.stderr)
+            print("  pip3 install -r klauss/requirements.txt", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("Or manually:", file=sys.stderr)
+            print("  pip3 install tomli", file=sys.stderr)
             sys.exit(1)
 
 

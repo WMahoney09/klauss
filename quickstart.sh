@@ -16,6 +16,23 @@ fi
 echo "✓ Claude Code found: $(which claude)"
 echo ""
 
+# Check for Python dependencies
+echo "Checking dependencies..."
+if python3 -c "import tomli" 2>/dev/null || python3 -c "import tomllib" 2>/dev/null; then
+    echo "✓ TOML parser available"
+else
+    echo "⚠️  TOML parser not found, installing..."
+    pip3 install -r requirements.txt
+    if [ $? -eq 0 ]; then
+        echo "✓ Dependencies installed"
+    else
+        echo "❌ Failed to install dependencies"
+        echo "   Please run: pip3 install -r requirements.txt"
+        exit 1
+    fi
+fi
+echo ""
+
 # Make scripts executable
 chmod +x *.py 2>/dev/null
 

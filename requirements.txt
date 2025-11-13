@@ -1,0 +1,5 @@
+# Klauss: Claude Code Parallel Orchestration
+# Python dependencies
+
+# TOML parser (built-in for Python 3.11+, required for older versions)
+tomli>=2.0.0; python_version < '3.11'
