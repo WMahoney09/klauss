@@ -31,7 +31,7 @@ Commands:
     list [status]       List all tasks (optionally filter by status)
     stats               Show queue statistics
     show <id>           Show detailed task information
-    logs <worker>       Tail logs for a specific worker (e.g., worker_1)
+    logs [worker] [-f]  View worker logs (use -f to follow in real-time)
     clean               Remove database and logs
     ps                  Show all Claude processes
     kill                Force kill all Claude worker processes
@@ -42,7 +42,9 @@ Examples:
     ./manage.sh submit "Add tests for auth module"         # Submit task
     ./manage.sh submit-file my_tasks.json                  # Batch submit
     ./manage.sh list pending                               # Show pending tasks
-    ./manage.sh logs worker_1                              # View worker logs
+    ./manage.sh logs                                       # List all worker logs
+    ./manage.sh logs worker_1                              # View worker_1 logs
+    ./manage.sh logs worker_1 -f                           # Follow worker_1 logs
     ./manage.sh dashboard                                  # Open dashboard
 
 EOF
@@ -177,18 +179,58 @@ case "$1" in
 
     logs)
         if [ -z "$2" ]; then
-            echo "Error: Please provide a worker ID"
-            echo "Usage: ./manage.sh logs <worker_id>"
-            echo "Example: ./manage.sh logs worker_1"
-            exit 1
-        fi
-        LOG_FILE="$SCRIPT_DIR/logs/${2}.log"
-        if [ -f "$LOG_FILE" ]; then
-            tail -f "$LOG_FILE"
+            # Show available logs if no worker specified
+            echo "Available worker logs:"
+            echo ""
+            if [ -d "$SCRIPT_DIR/logs" ] && [ "$(ls -A $SCRIPT_DIR/logs/*.log 2>/dev/null)" ]; then
+                for log in "$SCRIPT_DIR/logs"/*.log; do
+                    filename=$(basename "$log")
+                    size=$(ls -lh "$log" | awk '{print $5}')
+                    modified=$(ls -l "$log" | awk '{print $6, $7, $8}')
+                    echo "  📄 $filename ($size, modified: $modified)"
+                done
+                echo ""
+                echo "Usage: ./manage.sh logs <worker_id>"
+                echo "Example: ./manage.sh logs worker_1"
+                echo ""
+                echo "Or use -f to follow logs in real-time:"
+                echo "Example: ./manage.sh logs worker_1 -f"
+            else
+                echo "  No worker logs found in $SCRIPT_DIR/logs/"
+                echo ""
+                echo "Workers haven't been started yet, or logs directory doesn't exist."
+            fi
         else
-            echo "Error: Log file not found: $LOG_FILE"
-            echo "Available logs:"
-            ls -1 "$SCRIPT_DIR/logs/" 2>/dev/null || echo "No logs found"
+            WORKER_ID="$2"
+            FOLLOW_FLAG=""
+
+            # Check if third argument is -f for follow
+            if [ "$3" = "-f" ]; then
+                FOLLOW_FLAG="-f"
+            fi
+
+            LOG_FILE="$SCRIPT_DIR/logs/${WORKER_ID}.log"
+            if [ -f "$LOG_FILE" ]; then
+                if [ -n "$FOLLOW_FLAG" ]; then
+                    echo "Following logs for $WORKER_ID (Ctrl+C to stop)..."
+                    echo ""
+                    tail -f "$LOG_FILE"
+                else
+                    echo "Showing last 50 lines of logs for $WORKER_ID:"
+                    echo "  (use './manage.sh logs $WORKER_ID -f' to follow in real-time)"
+                    echo ""
+                    tail -n 50 "$LOG_FILE"
+                fi
+            else
+                echo "❌ Error: Log file not found: $LOG_FILE"
+                echo ""
+                echo "Available logs:"
+                if [ -d "$SCRIPT_DIR/logs" ]; then
+                    ls -1 "$SCRIPT_DIR/logs/"/*.log 2>/dev/null || echo "  No logs found"
+                else
+                    echo "  Logs directory doesn't exist yet"
+                fi
+            fi
         fi
         ;;
 

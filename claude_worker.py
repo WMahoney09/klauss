@@ -142,22 +142,67 @@ class ClaudeWorker:
             except:
                 pass
 
-    def run(self):
-        """Main worker loop"""
-        print(f"[{self.worker_id}] Starting worker")
-        print(f"[{self.worker_id}] Database: {self.queue.db_path}")
+    def startup_health_check(self):
+        """Validate worker configuration before starting task loop"""
+        print(f"[{self.worker_id}] [STARTUP] Performing health check...")
 
-        # Verify database exists and is accessible
+        # 1. Check database exists and is accessible
         db_path = Path(self.queue.db_path)
         if not db_path.exists():
-            print(f"[{self.worker_id}] ⚠️  Warning: Database file does not exist yet: {self.queue.db_path}")
-            print(f"[{self.worker_id}] Database will be created on first connection")
-        else:
-            db_size = db_path.stat().st_size
-            print(f"[{self.worker_id}] Database size: {db_size} bytes")
+            print(f"[{self.worker_id}] [ERROR] ❌ Database file does not exist: {self.queue.db_path}")
+            print(f"[{self.worker_id}] [ERROR]")
+            print(f"[{self.worker_id}] [ERROR] This usually means the orchestrator hasn't created tasks yet,")
+            print(f"[{self.worker_id}] [ERROR] or workers and orchestrator are using different databases.")
+            print(f"[{self.worker_id}] [ERROR]")
+            print(f"[{self.worker_id}] [ERROR] Suggestions:")
+            print(f"[{self.worker_id}] [ERROR]   1. Run the orchestrator first to create tasks")
+            print(f"[{self.worker_id}] [ERROR]   2. Check database path configuration in .klauss.toml")
+            print(f"[{self.worker_id}] [ERROR]   3. Ensure orchestrator and workers run from same project root")
+            sys.exit(1)
+
+        # 2. Check database size
+        db_size = db_path.stat().st_size
+        print(f"[{self.worker_id}] [CONFIG] Database: {self.queue.db_path}")
+        print(f"[{self.worker_id}] [CONFIG] Database size: {db_size} bytes")
+
+        # 3. Test database connection
+        try:
+            self.queue._get_conn().execute("SELECT 1")
+            print(f"[{self.worker_id}] [CONFIG] ✅ Database connection successful")
+        except Exception as e:
+            print(f"[{self.worker_id}] [ERROR] ❌ Cannot connect to database: {e}")
+            sys.exit(1)
+
+        # 4. Check for pending tasks
+        try:
+            pending = self.queue.list_tasks(status='pending')
+            print(f"[{self.worker_id}] [CONFIG] Pending tasks visible: {len(pending)}")
+
+            if len(pending) == 0:
+                print(f"[{self.worker_id}] [WARNING] ⚠️  No pending tasks found")
+                print(f"[{self.worker_id}] [WARNING] Worker will wait for new tasks...")
+            else:
+                print(f"[{self.worker_id}] [CONFIG] ✅ Tasks are available to claim")
+        except Exception as e:
+            print(f"[{self.worker_id}] [ERROR] ❌ Error checking tasks: {e}")
+            sys.exit(1)
+
+        # 5. Log working directory
+        print(f"[{self.worker_id}] [CONFIG] Working directory: {os.getcwd()}")
+
+        print(f"[{self.worker_id}] [STARTUP] ✅ Health check passed")
+
+    def run(self):
+        """Main worker loop"""
+        print(f"[{self.worker_id}] [STARTUP] Starting worker")
+        print(f"[{self.worker_id}] [STARTUP] Worker ID: {self.worker_id}")
+
+        # Perform startup health check
+        self.startup_health_check()
 
         # Register worker
         self.queue.register_worker(self.worker_id)
+        print(f"[{self.worker_id}] [STARTUP] ✅ Worker registered")
 
         # Start heartbeat
         self.start_heartbeat()
@@ -178,32 +223,38 @@ class ClaudeWorker:
 
                 if not task:
                     # No tasks available, wait a bit
-                    print(f"[{self.worker_id}] No tasks available, waiting...")
+                    print(f"[{self.worker_id}] [IDLE] No tasks available, waiting...")
                     time.sleep(2)
                     continue
 
                 # Execute task
                 self.current_task_id = task['id']
-                print(f"[{self.worker_id}] Claimed task {task['id']}")
+                task_preview = task['prompt'][:60] + "..." if len(task['prompt']) > 60 else task['prompt']
+                print(f"[{self.worker_id}] [CLAIM] ✅ Claimed task {task['id']}")
+                print(f"[{self.worker_id}] [CLAIM] Prompt: {task_preview}")
 
                 # Mark as in progress
                 self.queue.start_task(task['id'], self.worker_id)
+                print(f"[{self.worker_id}] [EXEC] Executing task {task['id']}...")
 
                 # Execute
                 result = self.execute_task(task)
 
                 # Mark as complete or failed
                 if result.get('error'):
-                    print(f"[{self.worker_id}] Task {task['id']} failed: {result['error']}")
+                    print(f"[{self.worker_id}] [FAIL] ❌ Task {task['id']} failed")
+                    print(f"[{self.worker_id}] [FAIL] Error: {result['error']}")
                     self.queue.fail_task(task['id'], self.worker_id, result['error'])
                 else:
-                    print(f"[{self.worker_id}] Task {task['id']} completed successfully")
+                    print(f"[{self.worker_id}] [COMPLETE] ✅ Task {task['id']} completed successfully")
+                    if result.get('return_code') is not None:
+                        print(f"[{self.worker_id}] [COMPLETE] Exit code: {result['return_code']}")
                     self.queue.complete_task(task['id'], self.worker_id, result)
 
                 self.current_task_id = None
 
             except Exception as e:
-                print(f"[{self.worker_id}] Error in main loop: {e}", file=sys.stderr)
+                print(f"[{self.worker_id}] [ERROR] ❌ Error in main loop: {e}", file=sys.stderr)
                 if self.current_task_id:
                     try:
                         self.queue.fail_task(
@@ -216,7 +267,7 @@ class ClaudeWorker:
                     self.current_task_id = None
                 time.sleep(5)
 
-        print(f"[{self.worker_id}] Worker stopped")
+        print(f"[{self.worker_id}] [SHUTDOWN] Worker stopped")
 
 
 if __name__ == '__main__':
