@@ -345,3 +345,42 @@ class TaskQueue:
             )
         """, (timeout_seconds / 86400.0,))
         conn.commit()
+
+    # Convenience aliases for more intuitive API
+    def list_tasks(self, status: Optional[str] = None, job_id: Optional[str] = None) -> List[Dict]:
+        """
+        List tasks with optional filters
+
+        Args:
+            status: Filter by task status (pending, claimed, in_progress, completed, failed)
+            job_id: Filter by job ID
+
+        Returns:
+            List of task dictionaries
+
+        Examples:
+            # Get all pending tasks
+            pending_tasks = queue.list_tasks(status='pending')
+
+            # Get all tasks for a job
+            job_tasks = queue.list_tasks(job_id='job_abc123')
+
+            # Get completed tasks for a job
+            completed = queue.list_tasks(status='completed', job_id='job_abc123')
+
+            # Get all tasks
+            all_tasks = queue.list_tasks()
+        """
+        if job_id:
+            return self.get_job_tasks(job_id, status)
+        else:
+            return self.get_all_tasks(status)
+
+    def list_workers(self) -> List[Dict]:
+        """
+        List all registered workers
+
+        Returns:
+            List of worker dictionaries with status and heartbeat info
+        """
+        return self.get_all_workers()
