@@ -4,20 +4,18 @@
 
 Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
-> 🤖 **This was built by Claude, for Claude**
+> 🤖 **This was built with Claude for Claude to use**
 
 ## 🎯 Quick Start
 
 ### 1. Add Klauss to Your Project
-
+#### Add as submodule
 ```bash
-cd your-project
-
-# Add as submodule
-git submodule add https://github.com/yourusername/klauss.git klauss
+git submodule add https://github.com/WMahoney09/klauss.git klauss
 git submodule update --init --recursive
-
-# Install dependencies
+```
+#### Install dependencies
+```bash
 pip3 install -r klauss/requirements.txt
 ```
 
