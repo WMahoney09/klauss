@@ -74,35 +74,32 @@ class ClaudeWorker:
 
         print(f"[{self.worker_id}] Executing task {task_id}: {prompt[:50]}...")
 
-        # Build Claude Code command
-        # We'll use a temp file to pass the full prompt with context
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-            # Build comprehensive prompt with context
-            full_prompt = f"Task ID: {task_id}\n\n"
+        # Build comprehensive prompt with context
+        full_prompt = f"Task ID: {task_id}\n\n"
 
-            if context_files:
-                full_prompt += "Context files to review:\n"
-                for file_path in context_files:
-                    full_prompt += f"- {file_path}\n"
-                full_prompt += "\n"
+        if context_files:
+            full_prompt += "Context files to review:\n"
+            for file_path in context_files:
+                full_prompt += f"- {file_path}\n"
+            full_prompt += "\n"
 
-            if expected_outputs:
-                full_prompt += "Expected outputs:\n"
-                for output in expected_outputs:
-                    full_prompt += f"- {output}\n"
-                full_prompt += "\n"
+        if expected_outputs:
+            full_prompt += "Expected outputs:\n"
+            for output in expected_outputs:
+                full_prompt += f"- {output}\n"
+            full_prompt += "\n"
 
-            full_prompt += f"Task:\n{prompt}\n\n"
-            full_prompt += "Please complete this task. When done, respond with 'TASK_COMPLETE'."
-
-            f.write(full_prompt)
-            prompt_file = f.name
+        full_prompt += f"Task:\n{prompt}\n\n"
+        full_prompt += "Please complete this task. When done, respond with 'TASK_COMPLETE'."
 
         try:
-            # Execute Claude Code
-            # Note: We assume 'claude' is in PATH
+            # Execute Claude Code using -p flag for non-interactive mode
+            # Use bypassPermissions mode to allow autonomous tool execution
+            # Pass prompt via stdin to handle long prompts properly
             result = subprocess.run(
-                ['claude', '--message', full_prompt, '--working-dir', working_dir],
+                ['claude', '-p', '--permission-mode', 'bypassPermissions'],
+                input=full_prompt,
+                cwd=working_dir,
                 capture_output=True,
                 text=True,
                 timeout=1800  # 30 minute timeout
@@ -116,12 +113,29 @@ class ClaudeWorker:
                 'working_dir': working_dir
             }
 
-            # Check for expected outputs
+            # Validate exit code (Issue #11 fix)
+            if result.returncode != 0:
+                error_msg = f"Claude CLI exited with code {result.returncode}"
+                if result.stderr:
+                    error_msg += f": {result.stderr.strip()}"
+                output['error'] = error_msg
+                return output
+
+            # Check for expected output files (Issue #11 fix)
             if expected_outputs:
                 output['expected_files_present'] = {}
+                missing_files = []
                 for expected_file in expected_outputs:
                     file_path = Path(working_dir) / expected_file
-                    output['expected_files_present'][expected_file] = file_path.exists()
+                    is_present = file_path.exists()
+                    output['expected_files_present'][expected_file] = is_present
+                    if not is_present:
+                        missing_files.append(expected_file)
+
+                # Fail task if expected files are missing
+                if missing_files:
+                    output['error'] = f"Expected output files not created: {', '.join(missing_files)}"
+                    return output
 
             return output
 
@@ -135,12 +149,6 @@ class ClaudeWorker:
                 'error': str(e),
                 'exception_type': type(e).__name__
             }
-        finally:
-            # Cleanup temp file
-            try:
-                os.unlink(prompt_file)
-            except:
-                pass
 
     def startup_health_check(self):
         """Validate worker configuration before starting task loop"""

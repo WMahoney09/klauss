@@ -18,7 +18,8 @@
       "Bash(./test_integration.sh:*)",
       "Bash(./test_logging.sh:*)",
       "Bash(gh api:*)",
-      "Bash(gh pr review:*)"
+      "Bash(gh pr review:*)",
+      "Bash(gh issue view:*)"
     ],
     "deny": [],
     "ask": []
