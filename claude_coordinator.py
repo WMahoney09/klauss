@@ -15,12 +15,23 @@ from pathlib import Path
 from claude_queue import TaskQueue
 
 class ClaudeCoordinator:
-    def __init__(self, num_workers: int = 4, db_path: str = "claude_tasks.db"):
+    def __init__(self, num_workers: int = 4, db_path: str = "claude_tasks.db",
+                 idle_timeout: int = 300):
+        """
+        Initialize coordinator
+
+        Args:
+            num_workers: Number of workers to spawn
+            db_path: Path to task database
+            idle_timeout: Seconds of inactivity before auto-shutdown (0 = disabled)
+        """
         self.num_workers = num_workers
         self.db_path = db_path
         self.queue = TaskQueue(db_path)
         self.workers: List[subprocess.Popen] = []
         self.running = True
+        self.idle_timeout = idle_timeout
+        self.last_activity_time = time.time()
 
     def spawn_worker(self, worker_id: str) -> subprocess.Popen:
         """Spawn a single worker process"""
@@ -94,6 +105,25 @@ class ClaudeCoordinator:
         """Monitor workers and restart if they crash"""
         while self.running:
             time.sleep(5)
+
+            # Check for idle timeout
+            if self.idle_timeout > 0:
+                stats = self.queue.get_stats()
+                active_tasks = stats['pending'] + stats['claimed'] + stats['in_progress']
+
+                if active_tasks > 0:
+                    # Tasks are active, update last activity time
+                    self.last_activity_time = time.time()
+                else:
+                    # No active tasks, check idle time
+                    idle_duration = time.time() - self.last_activity_time
+
+                    if idle_duration >= self.idle_timeout:
+                        print(f"\n⏰ Workers idle for {int(idle_duration)}s (timeout: {self.idle_timeout}s)")
+                        print("🛑 Auto-shutting down workers due to inactivity...")
+                        self.running = False
+                        self.stop()
+                        return
 
             # Check worker processes
             for i, worker in enumerate(self.workers):

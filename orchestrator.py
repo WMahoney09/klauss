@@ -7,6 +7,8 @@ Allows Claude Code instances to delegate work to worker pool
 import uuid
 import json
 import time
+import subprocess
+import sys
 from typing import List, Dict, Optional, Callable
 from pathlib import Path
 
@@ -81,6 +83,218 @@ class ClaudeOrchestrator:
             print(f"  Project: {self.config.project.name}")
             print(f"  Database: {final_db_path}")
             print(f"  Project Root: {self.config.project_root}")
+
+    def check_workers_running(self) -> int:
+        """
+        Check how many workers are currently running
+
+        Returns:
+            Number of active claude_worker.py processes
+        """
+        try:
+            result = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # Count lines with claude_worker.py
+            worker_count = result.stdout.count("claude_worker.py")
+            return worker_count
+        except Exception:
+            return 0
+
+    def calculate_optimal_workers(self, job_id: str, max_workers: int = 10) -> int:
+        """
+        Calculate optimal number of workers based on pending tasks
+
+        Args:
+            job_id: Job ID to check
+            max_workers: Maximum workers to suggest
+
+        Returns:
+            Recommended worker count
+        """
+        stats = self.queue.get_job_stats(job_id)
+        pending_tasks = stats['pending'] + stats['claimed']
+
+        # Optimal = number of parallel tasks, capped at max
+        optimal = min(pending_tasks, max_workers)
+
+        # Minimum of 1 worker if any tasks
+        return max(1, optimal)
+
+    def start_workers(self, count: int, ask_permission: bool = True) -> bool:
+        """
+        Start worker processes with optional user confirmation
+
+        Args:
+            count: Number of workers to start
+            ask_permission: If True, prompt user for confirmation
+
+        Returns:
+            True if workers started, False if user declined or error
+        """
+        if ask_permission:
+            response = input(
+                f"\n💡 I'd like to start {count} workers for parallel execution.\n"
+                f"   This will spawn {count} Claude Code instances to work simultaneously.\n"
+                f"   Start workers? (y/n): "
+            ).strip().lower()
+
+            if response not in ['y', 'yes']:
+                print("⏭️  Skipping parallel execution (workers not started)")
+                return False
+
+        print(f"🚀 Starting {count} workers...")
+
+        # Find klauss directory and coordinator script
+        if not self.config.klauss_dir:
+            print("❌ Error: Could not find klauss directory")
+            return False
+
+        coordinator_script = self.config.klauss_dir / "claude_coordinator.py"
+        if not coordinator_script.exists():
+            print(f"❌ Error: Coordinator script not found: {coordinator_script}")
+            return False
+
+        try:
+            # Start coordinator in background
+            process = subprocess.Popen(
+                [sys.executable, str(coordinator_script), str(count), self.queue.db_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True  # Detach from parent
+            )
+
+            # Give workers a moment to start
+            time.sleep(2)
+
+            # Check if workers are running
+            running = self.check_workers_running()
+            if running >= count:
+                print(f"✅ {running} workers started successfully!")
+                return True
+            else:
+                print(f"⚠️  Started but only detected {running} workers (expected {count})")
+                return running > 0
+
+        except Exception as e:
+            print(f"❌ Error starting workers: {e}")
+            return False
+
+    def ensure_workers_available(self, job_id: str) -> bool:
+        """
+        Ensure workers are available before executing job.
+        Prompts user to start workers if needed.
+
+        Args:
+            job_id: Job ID to check
+
+        Returns:
+            True if workers are available, False otherwise
+        """
+        # Check current workers
+        current_workers = self.check_workers_running()
+
+        if current_workers > 0:
+            print(f"✓ {current_workers} workers already running")
+            return True
+
+        # Calculate optimal worker count
+        optimal = self.calculate_optimal_workers(job_id)
+
+        print(f"\n📊 Job Analysis:")
+        print(f"   - {self.queue.get_job_stats(job_id)['pending']} tasks can run in parallel")
+        print(f"   - Suggesting {optimal} workers for optimal execution")
+
+        # Prompt to start workers
+        return self.start_workers(optimal, ask_permission=True)
+
+    def stop_workers(self) -> bool:
+        """
+        Stop all running workers
+
+        Returns:
+            True if workers were stopped, False if none running
+        """
+        worker_count = self.check_workers_running()
+
+        if worker_count == 0:
+            print("No workers currently running")
+            return False
+
+        print(f"🛑 Stopping {worker_count} workers...")
+
+        try:
+            # Kill all claude_worker processes
+            subprocess.run(
+                ["pkill", "-f", "claude_worker.py"],
+                timeout=5
+            )
+
+            # Also kill coordinator
+            subprocess.run(
+                ["pkill", "-f", "claude_coordinator.py"],
+                timeout=5
+            )
+
+            # Wait a moment and check
+            time.sleep(1)
+            remaining = self.check_workers_running()
+
+            if remaining == 0:
+                print("✅ All workers stopped")
+                return True
+            else:
+                print(f"⚠️  {remaining} workers still running (may need force kill)")
+                return False
+
+        except Exception as e:
+            print(f"❌ Error stopping workers: {e}")
+            return False
+
+    def get_worker_status(self) -> Dict:
+        """
+        Get detailed status of running workers
+
+        Returns:
+            Dict with worker information
+        """
+        try:
+            # Get worker processes
+            result = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            workers = []
+            for line in result.stdout.split('\n'):
+                if 'claude_worker.py' in line:
+                    parts = line.split()
+                    if len(parts) >= 11:
+                        workers.append({
+                            'pid': parts[1],
+                            'cpu': parts[2],
+                            'mem': parts[3],
+                            'started': ' '.join(parts[8:10]),
+                        })
+
+            # Get queue stats
+            queue_stats = self.queue.get_stats()
+            db_workers = self.queue.get_all_workers()
+
+            return {
+                'process_count': len(workers),
+                'processes': workers,
+                'queue_stats': queue_stats,
+                'registered_workers': db_workers
+            }
+
+        except Exception as e:
+            return {'error': str(e)}
 
     def create_job(self, description: str, metadata: Optional[Dict] = None) -> str:
         """Create a new job and return job ID"""
@@ -161,7 +375,8 @@ class ClaudeOrchestrator:
     def wait_and_collect(self, job_id: str,
                         poll_interval: Optional[float] = None,
                         timeout: Optional[float] = None,
-                        show_progress: Optional[bool] = None) -> Dict[int, Dict]:
+                        show_progress: Optional[bool] = None,
+                        auto_start_workers: bool = True) -> Dict[int, Dict]:
         """
         Wait for all tasks in a job to complete and collect results
 
@@ -170,6 +385,7 @@ class ClaudeOrchestrator:
             poll_interval: Seconds between status checks (uses config default if None)
             timeout: Maximum seconds to wait (None = no timeout)
             show_progress: Show progress updates (uses config default if None)
+            auto_start_workers: Check and prompt for workers if needed (default: True)
 
         Returns:
             Dict mapping task_id to result data
@@ -179,6 +395,12 @@ class ClaudeOrchestrator:
             poll_interval = self.config.defaults.poll_interval
         if show_progress is None:
             show_progress = self.config.monitoring.progress_updates
+
+        # Check if workers are available (with user prompt if needed)
+        if auto_start_workers:
+            if not self.ensure_workers_available(job_id):
+                print("\n⚠️  Warning: No workers available. Tasks will not execute.")
+                print("   You can start workers manually: ./manage.sh start <count>")
 
         print(f"\nWaiting for job {job_id} to complete...")
         start_time = time.time()

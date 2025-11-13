@@ -1,6 +1,6 @@
 # Klauss: Claude Code Parallel Orchestration
 
-**Meet Klauss, Claude's friend who orchestrates multi-agent workflows from the CLI.**
+**Meet Klauss, Claude's friend who orchestrates multi-agent workflows.**
 
 Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
@@ -21,27 +21,36 @@ git submodule update --init --recursive
 pip3 install tomli
 ```
 
-### 2. Start Workers
+### 2. Talk to Claude Code
 
-```bash
-cd klauss
-./manage.sh start 4  # Start 4 worker instances
-```
-
-### 3. Talk to Claude Code
-
-**That's it!** Now just talk to Claude Code normally:
+**That's it!** Now just talk to Claude Code normally. Claude will automatically handle workers:
 
 ```
 You: "Build a REST API with authentication, including endpoints for
      login, registration, JWT middleware, and comprehensive tests."
 
-Claude Code: "I'll break this down and execute in parallel..."
-             [Uses Klauss internally to delegate work]
-             [4 workers execute tasks simultaneously]
-             [Collects results and synthesizes]
+Claude Code: "I'll break this down into 6 parallel tasks..."
+
+             📊 Job Analysis:
+                - 6 tasks can run in parallel
+                - Suggesting 6 workers for optimal execution
+
+             💡 I'd like to start 6 workers for parallel execution.
+                This will spawn 6 Claude Code instances to work simultaneously.
+                Start workers? (y/n):
+
+You: "y"
+
+Claude Code: 🚀 Starting 6 workers...
+             ✅ 6 workers started successfully!
+
+             [Workers execute tasks in parallel]
+             [Shows real-time progress]
+
              "Done! Here's what I built..."
 ```
+
+**Workers start automatically when needed!** Claude detects the optimal number based on your task.
 
 ## 💡 How It Works
 
@@ -147,6 +156,82 @@ You'll see:
 ```bash
 ./manage.sh stats    # Quick statistics
 ./manage.sh list     # List all tasks
+```
+
+## 🔄 Worker Management
+
+### Worker Lifecycle
+
+**Auto-Start:** Workers start automatically when Claude needs them (with your permission)
+
+**Auto-Shutdown:** Workers automatically stop after **5 minutes** of inactivity
+
+**Manual Control:** You can manage workers anytime
+
+### Check Worker Status
+
+See what's running and resource usage:
+
+```bash
+./manage.sh workers
+```
+
+Output:
+```
+Worker Status
+============================================
+
+Active Processes:
+  Workers:     4
+  Coordinator: 1
+
+Worker Details:
+----------------------------------------
+PID      CPU%   MEM%   TIME       COMMAND
+12345    5.2    2.1    0:15.23    python3 claude_worker.py
+12346    4.8    2.0    0:14.56    python3 claude_worker.py
+12347    6.1    2.2    0:16.02    python3 claude_worker.py
+12348    5.5    2.1    0:15.78    python3 claude_worker.py
+
+Queue Statistics
+========================================
+Pending:      0
+In Progress:  2
+Completed:    15
+Failed:       0
+```
+
+### Manual Worker Control
+
+```bash
+# Stop all workers gracefully
+./manage.sh stop
+
+# Force kill if needed
+./manage.sh kill
+
+# Start workers manually (alternative to auto-start)
+./manage.sh start 6
+
+# Check all Claude processes
+./manage.sh ps
+```
+
+### From Claude Code
+
+Claude can also stop workers programmatically:
+
+```python
+from orchestrator import ClaudeOrchestrator
+
+orch = ClaudeOrchestrator("main")
+
+# Check workers
+status = orch.get_worker_status()
+print(f"{status['process_count']} workers running")
+
+# Stop workers
+orch.stop_workers()
 ```
 
 ## 🔧 Configuration (Optional)

@@ -13,6 +13,8 @@ Usage: ./manage.sh <command> [options]
 Commands:
     init-config         Create .klauss.toml config in current directory
     start [N]           Start coordinator with N workers (default: 4)
+    stop                Stop all running workers gracefully
+    workers             Show detailed worker status and resource usage
     dashboard           Launch the real-time dashboard
     submit <prompt>     Submit a single task
     submit-file <file>  Submit tasks from JSON file
@@ -22,7 +24,7 @@ Commands:
     logs <worker>       Tail logs for a specific worker (e.g., worker_1)
     clean               Remove database and logs
     ps                  Show all Claude processes
-    kill                Kill all Claude worker processes
+    kill                Force kill all Claude worker processes
     help                Show this help message
 
 Examples:
@@ -73,6 +75,51 @@ case "$1" in
         WORKERS=${2:-4}
         echo "Starting coordinator with $WORKERS workers..."
         python3 "$SCRIPT_DIR/claude_coordinator.py" "$WORKERS" "$DB_PATH"
+        ;;
+
+    stop)
+        echo "Stopping all workers..."
+        pkill -f "claude_worker.py"
+        pkill -f "claude_coordinator.py"
+        sleep 1
+        REMAINING=$(ps aux | grep -E "(claude_worker|claude_coordinator)" | grep -v grep | wc -l)
+        if [ "$REMAINING" -eq 0 ]; then
+            echo "✅ All workers stopped"
+        else
+            echo "⚠️  $REMAINING processes still running"
+            echo "   Use './manage.sh kill' to force stop"
+        fi
+        ;;
+
+    workers)
+        echo "Worker Status"
+        echo "============================================"
+        echo ""
+
+        # Count workers
+        WORKER_COUNT=$(ps aux | grep "claude_worker.py" | grep -v grep | wc -l)
+        COORD_COUNT=$(ps aux | grep "claude_coordinator.py" | grep -v grep | wc -l)
+
+        echo "Active Processes:"
+        echo "  Workers:     $WORKER_COUNT"
+        echo "  Coordinator: $COORD_COUNT"
+        echo ""
+
+        if [ "$WORKER_COUNT" -gt 0 ]; then
+            echo "Worker Details:"
+            echo "----------------------------------------"
+            printf "%-8s %-6s %-6s %-10s %s\n" "PID" "CPU%" "MEM%" "TIME" "COMMAND"
+            ps aux | grep "claude_worker.py" | grep -v grep | awk '{printf "%-8s %-6s %-6s %-10s %s\n", $2, $3, $4, $10, $11 " " $12 " " $13}'
+            echo ""
+        else
+            echo "No workers currently running"
+            echo ""
+        fi
+
+        # Show queue stats if available
+        if command -v python3 &> /dev/null; then
+            python3 "$SCRIPT_DIR/submit_task.py" --db "$DB_PATH" stats 2>/dev/null || true
+        fi
         ;;
 
     dashboard)
