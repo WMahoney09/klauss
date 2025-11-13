@@ -16,11 +16,34 @@ from typing import Optional, Dict
 import signal
 
 from claude_queue import TaskQueue
+from config import Config
 
 class ClaudeWorker:
-    def __init__(self, worker_id: str, db_path: str = "claude_tasks.db"):
+    def __init__(self, worker_id: str, db_path: Optional[str] = None, config: Optional[Config] = None):
+        """
+        Initialize worker
+
+        Args:
+            worker_id: Unique identifier for this worker
+            db_path: Explicit database path (overrides config)
+            config: Pre-loaded Config object (optional)
+        """
         self.worker_id = worker_id
-        self.queue = TaskQueue(db_path)
+
+        # Load config if not provided
+        if config is None:
+            config = Config.load()
+        self.config = config
+
+        # Determine database path with precedence:
+        # 1. Explicit db_path argument (highest priority)
+        # 2. Config database path (from .klauss.toml or auto-detected)
+        if db_path:
+            final_db_path = db_path
+        else:
+            final_db_path = self.config.database.path
+
+        self.queue = TaskQueue(final_db_path)
         self.current_task_id: Optional[int] = None
         self.running = True
         self.heartbeat_thread = None
@@ -203,19 +226,8 @@ if __name__ == '__main__':
 
     worker_id = sys.argv[1]
 
-    # Determine database path with proper precedence:
-    # 1. Explicit argument (highest priority)
-    # 2. KLAUSS_DB_PATH environment variable
-    # 3. Default to "claude_tasks.db"
-    if len(sys.argv) > 2:
-        db_path = sys.argv[2]
-    elif 'KLAUSS_DB_PATH' in os.environ:
-        db_path = os.environ['KLAUSS_DB_PATH']
-        print(f"Using database from KLAUSS_DB_PATH: {db_path}")
-    else:
-        db_path = "claude_tasks.db"
-        print(f"Using default database: {db_path}")
-        print(f"Tip: Set KLAUSS_DB_PATH environment variable or pass db_path as argument")
+    # Explicit db_path argument takes precedence over config
+    db_path = sys.argv[2] if len(sys.argv) > 2 else None
 
-    worker = ClaudeWorker(worker_id, db_path)
+    worker = ClaudeWorker(worker_id, db_path=db_path)
     worker.run()

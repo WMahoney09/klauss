@@ -3,13 +3,14 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Determine database path with proper precedence:
-# 1. KLAUSS_DB_PATH environment variable (highest priority)
-# 2. Default to claude_tasks.db in script directory
-if [ -n "$KLAUSS_DB_PATH" ]; then
-    DB_PATH="$KLAUSS_DB_PATH"
-    echo "📁 Using database from KLAUSS_DB_PATH: $DB_PATH"
-else
+# Get database path from config using Python helper
+# This ensures consistency with orchestrator, workers, and coordinator
+DB_PATH=$(python3 "$SCRIPT_DIR/get_db_path.py" 2>/dev/null)
+
+# Check if we got a valid path
+if [ -z "$DB_PATH" ] || [ $? -ne 0 ]; then
+    echo "⚠️  Warning: Could not load database path from config" >&2
+    echo "   Using fallback: $SCRIPT_DIR/claude_tasks.db" >&2
     DB_PATH="$SCRIPT_DIR/claude_tasks.db"
 fi
 

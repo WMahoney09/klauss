@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./quickstart.sh)"
+      "Bash(./quickstart.sh)",
+      "Bash(gh issue create:*)",
+      "Bash(gh issue list:*)",
+      "Bash(git checkout:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(python3:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

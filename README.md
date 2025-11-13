@@ -391,22 +391,23 @@ Workers send heartbeats every 5 seconds. Stale tasks (from dead workers) are aut
 
 ### Custom Database Location
 
-**Recommended: Use the KLAUSS_DB_PATH environment variable**
+**Recommended: Use .klauss.toml configuration file**
 
 ```bash
-# Set for current session
-export KLAUSS_DB_PATH=/path/to/your/project/claude_tasks.db
+# Create config file in your project root
+./manage.sh init-config
+
+# Edit .klauss.toml
+cat > .klauss.toml << 'EOF'
+[database]
+path = "./my_custom_tasks.db"  # Relative to project root
+EOF
 
 # Now all Klauss commands will use this database
 ./manage.sh start 4
 ./manage.sh stats
-python orchestrator.py  # Will also use the same database
-
-# Or set in your shell profile (~/.bashrc or ~/.zshrc) for persistence:
-echo 'export KLAUSS_DB_PATH=/path/to/project/claude_tasks.db' >> ~/.zshrc
+python orchestrator.py  # All components read the same config
 ```
-
-All scripts will automatically check for `KLAUSS_DB_PATH` and use it if set.
 
 **Alternative: Pass database path explicitly to each script**
 
@@ -417,10 +418,10 @@ python claude_dashboard.py /tmp/my_queue.db
 ```
 
 **Path Resolution Priority:**
-1. Explicit path argument (if provided)
-2. `KLAUSS_DB_PATH` environment variable
-3. Project-specific auto-detection based on project name
-4. Default: `claude_tasks.db` in current directory
+1. Explicit path argument (highest priority)
+2. Database path in `.klauss.toml` config file
+3. Auto-detected: `{project_name}_claude_tasks.db` in project root
+4. Default fallback: `claude_tasks.db`
 
 ### Running a Single Worker
 
@@ -511,13 +512,16 @@ rm claude_tasks.db
   # Check what database workers are using (look in worker logs)
   cat logs/worker_1.log | grep "Database:"
 
-  # Set KLAUSS_DB_PATH to ensure consistency
-  export KLAUSS_DB_PATH=/full/path/to/your/project/claude_tasks.db
+  # Create .klauss.toml to ensure all components use same database
+  cat > .klauss.toml << 'EOF'
+[database]
+path = "./claude_tasks.db"
+EOF
   ```
 - Check that workers are running: `ps aux | grep claude_worker`
 - Check worker logs in `logs/worker_*.log`
 - Verify database exists and is accessible
-- Ensure orchestrator and workers use the same database path
+- All components (orchestrator, workers, coordinator) now use `Config.load()` for consistency
 
 **Tasks stuck in "claimed" state:**
 - Workers may have crashed without updating status
