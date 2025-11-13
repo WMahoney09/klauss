@@ -9,7 +9,16 @@
       "Bash(gh pr view:*)",
       "Bash(python3:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(git push:*)",
+      "Bash(chmod:*)",
+      "Bash(./test_integration.sh:*)",
+      "Bash(./test_logging.sh:*)",
+      "Bash(gh api:*)",
+      "Bash(gh pr review:*)"
     ],
     "deny": [],
     "ask": []
