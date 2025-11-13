@@ -1,0 +1,56 @@
+[
+  {
+    "prompt": "Create a simple Python function to calculate the factorial of a number. Include docstrings and type hints.",
+    "working_dir": null,
+    "context_files": null,
+    "expected_outputs": ["factorial.py"],
+    "priority": 5,
+    "metadata": {
+      "category": "coding",
+      "language": "python"
+    }
+  },
+  {
+    "prompt": "Write a bash script that backs up a directory to a timestamped archive. The script should accept the source directory as an argument and create a tar.gz file.",
+    "working_dir": null,
+    "context_files": null,
+    "expected_outputs": ["backup.sh"],
+    "priority": 3,
+    "metadata": {
+      "category": "scripting",
+      "language": "bash"
+    }
+  },
+  {
+    "prompt": "Create a simple HTTP server in Python that responds with 'Hello World' on the root path and returns JSON with server info on /info. Use only standard library.",
+    "working_dir": null,
+    "context_files": null,
+    "expected_outputs": ["server.py"],
+    "priority": 4,
+    "metadata": {
+      "category": "web",
+      "language": "python"
+    }
+  },
+  {
+    "prompt": "Write a README.md explaining how to set up a basic Python project with virtual environment, dependencies, and testing. Include code examples.",
+    "working_dir": null,
+    "context_files": null,
+    "expected_outputs": ["PROJECT_SETUP.md"],
+    "priority": 2,
+    "metadata": {
+      "category": "documentation"
+    }
+  },
+  {
+    "prompt": "Create a JavaScript function that debounces another function. Include JSDoc comments and usage examples.",
+    "working_dir": null,
+    "context_files": null,
+    "expected_outputs": ["debounce.js"],
+    "priority": 3,
+    "metadata": {
+      "category": "coding",
+      "language": "javascript"
+    }
+  }
+]

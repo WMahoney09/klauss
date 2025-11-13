@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./quickstart.sh)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
