@@ -1,107 +1,187 @@
-# Claude Code Parallel Task Orchestrator
+# Klauss: Claude Code Parallel Orchestration
 
-A system to manage and execute multiple Claude Code instances in parallel, working from a shared task queue.
+**Meet Klauss, Claude's friend who orchestrates multi-agent workflows from the CLI.**
 
-## Two Modes of Operation
+Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
-### 1. Manual Mode
-Submit tasks via CLI and let workers execute them in parallel.
+> 🤖 **This was built by Claude, for Claude**
 
-### 2. Orchestrator Mode ⭐ NEW
-**Claude Code instances can act as orchestrators**, delegating work to the worker pool:
+## 🎯 Quick Start
 
-```python
-from orchestrator import ClaudeOrchestrator
-
-# You (Claude Code) receive: "Build an authentication system"
-orch = ClaudeOrchestrator("claude_main")
-job = orch.create_job("Build authentication system")
-
-# Decompose into parallel sub-tasks
-orch.add_subtask(job, "Implement login endpoint", priority=10)
-orch.add_subtask(job, "Implement registration endpoint", priority=10)
-orch.add_subtask(job, "Create JWT middleware", priority=9)
-orch.add_subtask(job, "Write auth tests", priority=5)
-
-# Wait and synthesize
-results = orch.wait_and_collect(job)
-```
-
-See **[ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)** for full details.
-
-## Features
-
-- **SQLite-based task queue** with atomic task claiming
-- **Multiple concurrent Claude workers** executing tasks in parallel
-- **Orchestrator interface** for Claude Code delegation
-- **Hierarchical task relationships** (parent/child tasks)
-- **Job/session tracking** to group related tasks
-- **Structured task definitions** with context files and expected outputs
-- **Real-time dashboard** to monitor workers and tasks
-- **Automatic worker recovery** if a worker crashes
-- **Task prioritization** support
-- **Heartbeat monitoring** to detect stale workers
-- **Result collection and synthesis** helpers
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Submit Tasks   │
-│   (CLI/API)     │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  SQLite Queue   │◄───────┐
-│  (claude_tasks  │        │
-│      .db)       │        │
-└────────┬────────┘        │
-         │                 │
-         │                 │ Heartbeat
-         ├─────────┬───────┼─────────┬────────┐
-         │         │       │         │        │
-         ▼         ▼       ▼         ▼        ▼
-    ┌────────┬────────┬────────┬────────┬────────┐
-    │Worker 1│Worker 2│Worker 3│Worker 4│Worker N│
-    │ Claude │ Claude │ Claude │ Claude │ Claude │
-    └────────┴────────┴────────┴────────┴────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │   Dashboard    │
-              │  (Real-time    │
-              │   Monitoring)  │
-              └────────────────┘
-```
-
-## Installation
-
-All scripts are pure Python with no external dependencies (except Claude Code itself).
+### 1. Add Klauss to Your Project
 
 ```bash
-# Ensure Claude Code is installed and in your PATH
-which claude
+cd your-project
 
-# Make scripts executable
-chmod +x *.py
+# Add as submodule
+git submodule add https://github.com/yourusername/klauss.git klauss
+git submodule update --init --recursive
+
+# Install TOML parser (required) for reading config
+pip3 install tomli
 ```
 
-## Usage
+### 2. Start Workers
 
-### 1. Submit Tasks
-
-**Submit a single task:**
 ```bash
-python submit_task.py submit "Fix all ESLint errors in the codebase" \
-  --dir /path/to/project \
-  --context src/**/*.js \
-  --priority 5
+cd klauss
+./manage.sh start 4  # Start 4 worker instances
 ```
 
-**Submit tasks from a JSON file:**
+### 3. Talk to Claude Code
+
+**That's it!** Now just talk to Claude Code normally:
+
+```
+You: "Build a REST API with authentication, including endpoints for
+     login, registration, JWT middleware, and comprehensive tests."
+
+Claude Code: "I'll break this down and execute in parallel..."
+             [Uses Klauss internally to delegate work]
+             [4 workers execute tasks simultaneously]
+             [Collects results and synthesizes]
+             "Done! Here's what I built..."
+```
+
+## 💡 How It Works
+
+```
+┌─────────────────────────────────────────────────┐
+│  You: Give Claude Code a complex task           │
+└────────────────┬────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────┐
+│  Claude Code: Uses Klauss orchestrator          │
+│  - Breaks down into sub-tasks                   │
+│  - Submits to parallel queue                    │
+│  - Monitors progress                            │
+│  - Synthesizes results                          │
+└────────────────┬────────────────────────────────┘
+                 │
+                 ▼
+         ┌───────────────┐
+         │  Task Queue   │
+         └───────┬───────┘
+                 │
+     ┌───────────┼───────────┬───────────┐
+     ▼           ▼           ▼           ▼
+┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+│Worker 1 │ │Worker 2 │ │Worker 3 │ │Worker 4 │
+│ Claude  │ │ Claude  │ │ Claude  │ │ Claude  │
+└────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
+     │           │           │           │
+     └───────────┴───────────┴───────────┘
+                 │
+                 ▼
+         Results back to Claude Code
+                 │
+                 ▼
+┌─────────────────────────────────────────────────┐
+│  You: Receive complete, synthesized solution    │
+└─────────────────────────────────────────────────┘
+```
+
+**You interact with Claude Code. Claude Code uses Klauss under the hood.**
+
+## ✨ What This Gives You
+
+- **🚀 Faster execution** - Complex tasks complete in parallel
+- **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
+- **👀 Visibility** - Real-time dashboard shows parallel progress
+- **🔄 Automatic coordination** - Workers sync through shared queue
+- **🛡️ Safety** - Project boundaries enforced by default
+- **📦 Portable** - Add to any project via git submodule
+
+## 📖 Example Workflow
+
+### Simple Task
+```
+You: "Add input validation to all API endpoints"
+
+Claude: Breaking this down...
+        [Creates 8 sub-tasks for different endpoints]
+        [Workers execute in parallel]
+        [2 minutes later]
+        Done! Added validation to 8 endpoints. Here's what I did...
+```
+
+### Complex Multi-Step Task
+```
+You: "Build a user authentication system with:
+      - Login and registration endpoints
+      - JWT token management
+      - Password hashing
+      - Email verification
+      - Comprehensive tests
+      - API documentation"
+
+Claude: This is complex - I'll use parallel execution...
+        [Breaks down into 15+ sub-tasks]
+        [Shows real-time progress]
+        [Workers complete tasks simultaneously]
+        [10 minutes later]
+        Complete! Built full auth system with all features...
+```
+
+## 🎛️ Monitoring
+
+### Real-Time Dashboard
+
+While workers execute, monitor progress:
+
 ```bash
-python submit_task.py submit-file tasks.json
+# In another terminal
+cd klauss
+./manage.sh dashboard
+```
+
+You'll see:
+- Active workers and their current tasks
+- Completed/pending/failed task counts
+- Real-time progress updates
+- Task execution status
+
+### Check Status Anytime
+
+```bash
+./manage.sh stats    # Quick statistics
+./manage.sh list     # List all tasks
+```
+
+## 🔧 Configuration (Optional)
+
+Klauss works out-of-the-box with zero configuration. For advanced use:
+
+```bash
+# Generate project config
+./manage.sh init-config
+
+# Edit .klauss.toml in your project root
+# - Customize worker count
+# - Set project boundaries
+# - Configure cross-project coordination
+```
+
+See [Configuration Guide](#configuration) for details.
+
+## 📚 Documentation
+
+- **[ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)** - For Claude Code: How to use Klauss internally
+- **[Configuration](#configuration)** - Customize settings
+- **[Advanced Usage](#advanced-usage)** - Manual mode, cross-project coordination
+
+---
+
+## Advanced Usage
+
+### Manual Task Submission
+
+While Claude Code uses Klauss automatically, you can also submit tasks manually:
+
+```bash
+./manage.sh submit "Your task description"
+./manage.sh submit-file tasks.json
 ```
 
 Example `tasks.json`:
