@@ -1,0 +1,86 @@
+# Claude Code Orchestrator - Default Configuration
+# This file contains default settings for the orchestration system
+# Projects can override these by creating .klauss.toml in their root
+
+[project]
+# Project name (auto-detected from directory name if not specified)
+name = "auto-detect"
+description = ""
+
+[database]
+# Database path (empty = auto-generate: {project_name}_claude_tasks.db in klauss/)
+# Uncomment and set to override:
+# path = "/path/to/custom.db"
+
+# Auto-cleanup completed tasks older than N days (0 = disabled)
+auto_cleanup_days = 0
+
+[safety]
+# Enforce that tasks can only work within project directory
+enforce_project_boundary = true
+
+# Allow tasks to work in directories outside the project
+# (Requires explicit allow_external=True flag per task)
+allow_external_dirs = false
+
+# Warn before executing potentially destructive operations
+confirm_destructive = false
+
+[workers]
+# Default number of workers to spawn
+default_count = 4
+
+# Directory for worker logs (relative to klauss/)
+log_directory = "logs"
+
+# Automatically restart workers if they crash
+restart_on_failure = true
+
+# Worker heartbeat interval in seconds
+heartbeat_interval = 5
+
+# Mark workers as stale after N seconds without heartbeat
+stale_timeout = 3600
+
+[defaults]
+# Default priority for tasks (0-10, higher = more urgent)
+priority = 5
+
+# Default timeout for task execution in seconds
+timeout = 1800
+
+# Polling interval when waiting for job completion
+poll_interval = 2.0
+
+[monitoring]
+# Enable real-time dashboard
+dashboard_enabled = true
+
+# Show progress updates during wait_and_collect
+progress_updates = true
+
+# Enable detailed logging for debugging
+detailed_logging = false
+
+# Optional: Configuration for cross-project coordination
+# Uncomment and configure these sections in .klauss.toml if needed
+
+# [related_projects]
+# # Define shortcuts to related projects
+# backend = "../backend"
+# frontend = "../frontend"
+# wiki = "../project-wiki"
+
+# [coordination]
+# # Shared database for cross-project coordination
+# shared_db = "../shared_coordination_tasks.db"
+#
+# # Shared database is enabled
+# enabled = false
+
+# [directories]
+# # Optional shortcuts for common directories within project
+# src = "./src"
+# tests = "./tests"
+# docs = "./docs"
+# scripts = "./scripts"

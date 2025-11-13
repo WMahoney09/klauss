@@ -11,6 +11,7 @@ Claude Code Parallel Task Orchestrator - Management Script
 Usage: ./manage.sh <command> [options]
 
 Commands:
+    init-config         Create .klauss.toml config in current directory
     start [N]           Start coordinator with N workers (default: 4)
     dashboard           Launch the real-time dashboard
     submit <prompt>     Submit a single task
@@ -36,6 +37,38 @@ EOF
 }
 
 case "$1" in
+    init-config)
+        CONFIG_FILE=".klauss.toml"
+        TEMPLATE="$SCRIPT_DIR/.klauss.toml.example"
+
+        if [ -f "$CONFIG_FILE" ]; then
+            echo "❌ $CONFIG_FILE already exists in current directory"
+            read -p "Overwrite? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                echo "Cancelled"
+                exit 0
+            fi
+        fi
+
+        if [ ! -f "$TEMPLATE" ]; then
+            echo "❌ Template file not found: $TEMPLATE"
+            exit 1
+        fi
+
+        cp "$TEMPLATE" "$CONFIG_FILE"
+        echo "✓ Created $CONFIG_FILE"
+        echo ""
+        echo "Configuration file created! Edit $CONFIG_FILE to customize:"
+        echo "  - Project name and description"
+        echo "  - Database location"
+        echo "  - Safety settings"
+        echo "  - Worker defaults"
+        echo "  - Cross-project coordination (if needed)"
+        echo ""
+        echo "For most projects, the defaults work fine without any changes."
+        ;;
+
     start)
         WORKERS=${2:-4}
         echo "Starting coordinator with $WORKERS workers..."

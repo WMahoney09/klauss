@@ -1,0 +1,82 @@
+# Claude Code Orchestrator - Project Configuration Template
+# Copy this file to your project root as .klauss.toml to customize settings
+#
+# Usage:
+#   cp klauss/.klauss.toml.example .klauss.toml
+#   # Edit .klauss.toml to customize
+
+[project]
+# Project name (leave as "auto-detect" to use directory name)
+name = "auto-detect"
+description = "My awesome project"
+
+[database]
+# Database path (leave commented for auto-generated path)
+# Uncomment to use a custom database location:
+# path = "./my_custom_tasks.db"
+
+# Auto-cleanup completed tasks after N days (0 = never)
+auto_cleanup_days = 0
+
+[safety]
+# Enforce that tasks can only work within this project directory
+enforce_project_boundary = true
+
+# Allow tasks to work outside project (requires explicit allow_external=True per task)
+allow_external_dirs = false
+
+[workers]
+# Default number of workers when starting coordinator
+default_count = 4
+
+# Worker heartbeat interval (seconds)
+heartbeat_interval = 5
+
+# Mark workers as stale after this many seconds without heartbeat
+stale_timeout = 3600
+
+[defaults]
+# Default priority for tasks (0-10, higher = more urgent)
+priority = 5
+
+# Default task timeout (seconds)
+timeout = 1800
+
+# Polling interval when waiting for jobs (seconds)
+poll_interval = 2.0
+
+[monitoring]
+# Show real-time progress updates
+progress_updates = true
+
+# Enable detailed logging (useful for debugging)
+detailed_logging = false
+
+# ============================================================================
+# Optional: Cross-Project Coordination
+# ============================================================================
+# Uncomment these sections if you need to coordinate across multiple projects
+
+# [related_projects]
+# # Define shortcuts to related projects
+# backend = "../my-app-backend"
+# frontend = "../my-app-frontend"
+# wiki = "../../my-app-wiki"
+
+# [coordination]
+# # Enable shared database for cross-project coordination
+# enabled = false
+#
+# # Shared database location (all coordinating projects should point to same file)
+# shared_db = "../shared/coordination_tasks.db"
+
+# ============================================================================
+# Optional: Directory Shortcuts
+# ============================================================================
+# Define shortcuts for common directories within your project
+
+# [directories]
+# src = "./src"
+# tests = "./tests"
+# docs = "./docs"
+# scripts = "./scripts"

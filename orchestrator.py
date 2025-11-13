@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Callable
 from pathlib import Path
 
 from claude_queue import TaskQueue
+from config import Config, ProjectBoundaryError
 
 class ClaudeOrchestrator:
     """
@@ -35,10 +36,51 @@ class ClaudeOrchestrator:
         print(f"All tasks completed! {len(results)} results collected")
     """
 
-    def __init__(self, orchestrator_id: str, db_path: str = "claude_tasks.db"):
+    def __init__(self, orchestrator_id: str,
+                 db_path: Optional[str] = None,
+                 allow_external_dirs: bool = False,
+                 use_coordination: bool = False,
+                 **config_overrides):
+        """
+        Initialize orchestrator
+
+        Args:
+            orchestrator_id: Unique ID for this orchestrator
+            db_path: Explicit database path (overrides config)
+            allow_external_dirs: Allow tasks outside project boundaries
+            use_coordination: Use shared coordination database from config
+            **config_overrides: Additional config overrides
+        """
         self.orchestrator_id = orchestrator_id
-        self.queue = TaskQueue(db_path)
+
+        # Build config overrides
+        overrides = config_overrides.copy()
+        if allow_external_dirs:
+            overrides.setdefault('safety', {})['allow_external_dirs'] = True
+
+        # Load configuration
+        self.config = Config.load(overrides)
+
+        # Determine database path
+        if db_path:
+            # Explicit path overrides everything
+            final_db_path = db_path
+        elif use_coordination and self.config.coordination.enabled:
+            # Use shared coordination database from config
+            final_db_path = self.config.coordination.shared_db
+        else:
+            # Use auto-detected project database
+            final_db_path = self.config.database.path
+
+        self.queue = TaskQueue(final_db_path)
         self.current_job_id: Optional[str] = None
+
+        # Print helpful info
+        if self.config.monitoring.detailed_logging:
+            print(f"Orchestrator '{orchestrator_id}' initialized")
+            print(f"  Project: {self.config.project.name}")
+            print(f"  Database: {final_db_path}")
+            print(f"  Project Root: {self.config.project_root}")
 
     def create_job(self, description: str, metadata: Optional[Dict] = None) -> str:
         """Create a new job and return job ID"""
@@ -52,10 +94,38 @@ class ClaudeOrchestrator:
                    working_dir: Optional[str] = None,
                    context_files: Optional[List[str]] = None,
                    expected_outputs: Optional[List[str]] = None,
-                   priority: int = 0,
+                   priority: Optional[int] = None,
                    parent_task_id: Optional[int] = None,
-                   metadata: Optional[Dict] = None) -> int:
-        """Add a sub-task to a job"""
+                   metadata: Optional[Dict] = None,
+                   allow_external: bool = False) -> int:
+        """
+        Add a sub-task to a job
+
+        Args:
+            job_id: Job ID to add task to
+            prompt: Task description/instruction
+            working_dir: Directory where task should execute
+            context_files: Files to provide as context
+            expected_outputs: Expected output files
+            priority: Task priority (uses config default if None)
+            parent_task_id: Parent task ID for hierarchical tasks
+            metadata: Additional task metadata
+            allow_external: Allow this task to work outside project boundaries
+
+        Returns:
+            Task ID
+
+        Raises:
+            ProjectBoundaryError: If working_dir is outside project and not allowed
+        """
+        # Use default priority from config if not specified
+        if priority is None:
+            priority = self.config.defaults.priority
+
+        # Validate working directory
+        self.config.validate_working_dir(working_dir, allow_external)
+
+        # Add task to queue
         task_id = self.queue.add_task(
             prompt=prompt,
             working_dir=working_dir,
@@ -88,15 +158,28 @@ class ClaudeOrchestrator:
             'progress_pct': (completed / total * 100) if total > 0 else 0
         }
 
-    def wait_and_collect(self, job_id: str, poll_interval: float = 3.0,
+    def wait_and_collect(self, job_id: str,
+                        poll_interval: Optional[float] = None,
                         timeout: Optional[float] = None,
-                        show_progress: bool = True) -> Dict[int, Dict]:
+                        show_progress: Optional[bool] = None) -> Dict[int, Dict]:
         """
         Wait for all tasks in a job to complete and collect results
+
+        Args:
+            job_id: Job ID to wait for
+            poll_interval: Seconds between status checks (uses config default if None)
+            timeout: Maximum seconds to wait (None = no timeout)
+            show_progress: Show progress updates (uses config default if None)
 
         Returns:
             Dict mapping task_id to result data
         """
+        # Use config defaults
+        if poll_interval is None:
+            poll_interval = self.config.defaults.poll_interval
+        if show_progress is None:
+            show_progress = self.config.monitoring.progress_updates
+
         print(f"\nWaiting for job {job_id} to complete...")
         start_time = time.time()
 
