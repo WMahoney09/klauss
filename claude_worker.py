@@ -16,11 +16,34 @@ from typing import Optional, Dict
 import signal
 
 from claude_queue import TaskQueue
+from config import Config
 
 class ClaudeWorker:
-    def __init__(self, worker_id: str, db_path: str = "claude_tasks.db"):
+    def __init__(self, worker_id: str, db_path: Optional[str] = None, config: Optional[Config] = None):
+        """
+        Initialize worker
+
+        Args:
+            worker_id: Unique identifier for this worker
+            db_path: Explicit database path (overrides config)
+            config: Pre-loaded Config object (optional)
+        """
         self.worker_id = worker_id
-        self.queue = TaskQueue(db_path)
+
+        # Load config if not provided
+        if config is None:
+            config = Config.load()
+        self.config = config
+
+        # Determine database path with precedence:
+        # 1. Explicit db_path argument (highest priority)
+        # 2. Config database path (from .klauss.toml or auto-detected)
+        if db_path:
+            final_db_path = db_path
+        else:
+            final_db_path = self.config.database.path
+
+        self.queue = TaskQueue(final_db_path)
         self.current_task_id: Optional[int] = None
         self.running = True
         self.heartbeat_thread = None
@@ -122,6 +145,16 @@ class ClaudeWorker:
     def run(self):
         """Main worker loop"""
         print(f"[{self.worker_id}] Starting worker")
+        print(f"[{self.worker_id}] Database: {self.queue.db_path}")
+
+        # Verify database exists and is accessible
+        db_path = Path(self.queue.db_path)
+        if not db_path.exists():
+            print(f"[{self.worker_id}] ⚠️  Warning: Database file does not exist yet: {self.queue.db_path}")
+            print(f"[{self.worker_id}] Database will be created on first connection")
+        else:
+            db_size = db_path.stat().st_size
+            print(f"[{self.worker_id}] Database size: {db_size} bytes")
 
         # Register worker
         self.queue.register_worker(self.worker_id)
@@ -192,7 +225,9 @@ if __name__ == '__main__':
         sys.exit(1)
 
     worker_id = sys.argv[1]
-    db_path = sys.argv[2] if len(sys.argv) > 2 else "claude_tasks.db"
 
-    worker = ClaudeWorker(worker_id, db_path)
+    # Explicit db_path argument takes precedence over config
+    db_path = sys.argv[2] if len(sys.argv) > 2 else None
+
+    worker = ClaudeWorker(worker_id, db_path=db_path)
     worker.run()

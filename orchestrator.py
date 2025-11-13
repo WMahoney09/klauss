@@ -77,12 +77,14 @@ class ClaudeOrchestrator:
         self.queue = TaskQueue(final_db_path)
         self.current_job_id: Optional[str] = None
 
-        # Print helpful info
+        # Always print database path for debugging
+        print(f"📁 Orchestrator '{orchestrator_id}' initialized")
+        print(f"   Database: {final_db_path}")
+
+        # Print additional info if detailed logging enabled
         if self.config.monitoring.detailed_logging:
-            print(f"Orchestrator '{orchestrator_id}' initialized")
-            print(f"  Project: {self.config.project.name}")
-            print(f"  Database: {final_db_path}")
-            print(f"  Project Root: {self.config.project_root}")
+            print(f"   Project: {self.config.project.name}")
+            print(f"   Project Root: {self.config.project_root}")
 
     def check_workers_running(self) -> int:
         """

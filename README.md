@@ -389,12 +389,37 @@ Workers send heartbeats every 5 seconds. Stale tasks (from dead workers) are aut
 
 ### Custom Database Location
 
-All scripts accept a database path:
+**Recommended: Use .klauss.toml configuration file**
+
+```bash
+# Create config file in your project root
+./manage.sh init-config
+
+# Edit .klauss.toml
+cat > .klauss.toml << 'EOF'
+[database]
+path = "./my_custom_tasks.db"  # Relative to project root
+EOF
+
+# Now all Klauss commands will use this database
+./manage.sh start 4
+./manage.sh stats
+python orchestrator.py  # All components read the same config
+```
+
+**Alternative: Pass database path explicitly to each script**
+
 ```bash
 python claude_coordinator.py 4 /tmp/my_queue.db
 python submit_task.py --db /tmp/my_queue.db submit "Task"
 python claude_dashboard.py /tmp/my_queue.db
 ```
+
+**Path Resolution Priority:**
+1. Explicit path argument (highest priority)
+2. Database path in `.klauss.toml` config file
+3. Auto-detected: `{project_name}_claude_tasks.db` in project root
+4. Default fallback: `claude_tasks.db`
 
 ### Running a Single Worker
 
@@ -477,9 +502,24 @@ rm claude_tasks.db
 ## Troubleshooting
 
 **Workers not claiming tasks:**
+- **Check database path consistency** - This is the most common issue!
+  ```bash
+  # Find all database files
+  find . -name "*.db" -ls
+
+  # Check what database workers are using (look in worker logs)
+  cat logs/worker_1.log | grep "Database:"
+
+  # Create .klauss.toml to ensure all components use same database
+  cat > .klauss.toml << 'EOF'
+[database]
+path = "./claude_tasks.db"
+EOF
+  ```
 - Check that workers are running: `ps aux | grep claude_worker`
 - Check worker logs in `logs/worker_*.log`
 - Verify database exists and is accessible
+- All components (orchestrator, workers, coordinator) now use `Config.load()` for consistency
 
 **Tasks stuck in "claimed" state:**
 - Workers may have crashed without updating status

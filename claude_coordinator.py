@@ -9,25 +9,40 @@ import sys
 import subprocess
 import time
 import signal
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pathlib import Path
 
 from claude_queue import TaskQueue
+from config import Config
 
 class ClaudeCoordinator:
-    def __init__(self, num_workers: int = 4, db_path: str = "claude_tasks.db",
-                 idle_timeout: int = 300):
+    def __init__(self, num_workers: int = 4, db_path: Optional[str] = None,
+                 idle_timeout: int = 300, config: Optional[Config] = None):
         """
         Initialize coordinator
 
         Args:
             num_workers: Number of workers to spawn
-            db_path: Path to task database
+            db_path: Path to task database (overrides config if provided)
             idle_timeout: Seconds of inactivity before auto-shutdown (0 = disabled)
+            config: Pre-loaded Config object (optional)
         """
         self.num_workers = num_workers
-        self.db_path = db_path
-        self.queue = TaskQueue(db_path)
+
+        # Load config if not provided
+        if config is None:
+            config = Config.load()
+        self.config = config
+
+        # Determine database path with precedence:
+        # 1. Explicit db_path argument (highest priority)
+        # 2. Config database path (from .klauss.toml or auto-detected)
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = self.config.database.path
+
+        self.queue = TaskQueue(self.db_path)
         self.workers: List[subprocess.Popen] = []
         self.running = True
         self.idle_timeout = idle_timeout
@@ -67,8 +82,18 @@ class ClaudeCoordinator:
     def start(self):
         """Start all workers"""
         print(f"Starting {self.num_workers} Claude Code workers...")
-        print(f"Database: {self.db_path}")
-        print(f"Logs will be written to: logs/worker_*.log")
+        print(f"📁 Database: {self.db_path}")
+
+        # Verify database exists
+        db_path = Path(self.db_path)
+        if not db_path.exists():
+            print(f"⚠️  Warning: Database file does not exist: {self.db_path}")
+            print(f"    Make sure the orchestrator has created tasks in this database")
+        else:
+            db_size = db_path.stat().st_size
+            print(f"    Database size: {db_size} bytes")
+
+        print(f"📝 Logs will be written to: logs/worker_*.log")
         print()
 
         # Cleanup stale tasks from previous runs
@@ -169,12 +194,14 @@ class ClaudeCoordinator:
 
 if __name__ == '__main__':
     num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4
-    db_path = sys.argv[2] if len(sys.argv) > 2 else "claude_tasks.db"
+
+    # Explicit db_path argument takes precedence over config
+    db_path = sys.argv[2] if len(sys.argv) > 2 else None
 
     print("=" * 60)
     print("Claude Code Parallel Task Coordinator")
     print("=" * 60)
     print()
 
-    coordinator = ClaudeCoordinator(num_workers, db_path)
+    coordinator = ClaudeCoordinator(num_workers, db_path=db_path)
     coordinator.run()

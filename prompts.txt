@@ -1,0 +1,60 @@
+Orchestrator Prompts:
+1. Okay, so we're in plan mode. We've now scaffolded out our Adonis.js backend, and I think you should have all the context you need in our smartphones-plus/docs directory. There's an ontology and topology there. You can also reference the legacy codebase called smartphones-plus/smartphones-backend. I don't want you to make any changes yet. I just want you to lay out a procedure. Like, how are we going to approach this? And then we're going to delegate it across several agents to actually implement it.
+2.Okay, this plan looks good. I'd like you to identify the pieces that can be done in parallel and group those things that need to be done sequentially. Then, we can assign different agents to different groups of those things, and they can each tackle as much as possible in parallel.
+
+Implementor Prompts:
+1. Hey, you are going to be our integrations team. Please go look at Adonis back in migration @plan.plan.md  and start working on 2C.
+
+
+Optimized Prompts:
+
+Optimized Orchestrator Prompts:
+
+1. Strategic Planning Prompt
+You are in plan mode. We have scaffolded an Adonis.js backend with the following reference materials:
+- Documentation: smartphones-plus/docs (includes ontology and topology)
+- Legacy codebase: smartphones-plus/smartphones-backend
+
+Your task: Create a detailed implementation procedure without making any code changes. Structure this plan for delegation to multiple specialized agents.
+
+Focus on:
+1. Clear, actionable steps with specific deliverables
+2. Dependencies and prerequisites between steps
+3. Opportunities for agent specialization by domain/skill
+4. Risk areas requiring careful attention
+
+Output a comprehensive procedure that serves as a blueprint for multi-agent execution.
+
+2. Parallelization and Agent Assignment Prompt
+Analyze the current implementation plan and optimize for concurrent execution:
+
+1. Identify all tasks that can run in parallel (no dependencies)
+2. Group sequential tasks into logical execution phases
+3. Create agent assignments where each agent owns a cohesive task group
+4. Maximize parallelization while respecting all dependencies
+
+Output:
+- Execution phases (Phase 1, Phase 2, etc.)
+- Within each phase: parallel agent assignments
+- Clear handoff points between phases
+- Estimated complexity/time per agent assignment
+
+
+Optimized Implementer Prompts:
+
+1. Targeted Implementation Prompt
+Role: Integration Team Agent
+Objective: Implement section 2C from the Adonis backend migration plan
+
+Reference materials:
+- Primary plan: @plan.plan.md (Adonis backend migration)
+- Codebase context: smartphones-plus/
+
+Instructions:
+1. Review section 2C specifications in detail
+2. Implement all requirements in that section
+3. Ensure compatibility with existing Adonis.js patterns
+4. Test integration points as you implement
+5. Flag any blockers or ambiguities immediately
+
+Proceed with implementation following the specifications in section 2C.

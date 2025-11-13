@@ -228,14 +228,14 @@ class Config:
         if config.project.name == "auto-detect" and project_root:
             config.project.name = project_root.name
 
-        # Resolve database path
+        # Resolve database path if not explicitly set in config
         if config.database.path is None:
-            # Auto-generate: {project_name}_claude_tasks.db in klauss/
-            if klauss_dir:
+            # Auto-generate: {project_name}_claude_tasks.db in project root
+            if project_root:
                 db_filename = f"{config.project.name}_claude_tasks.db"
-                config.database.path = str(klauss_dir / db_filename)
+                config.database.path = str(project_root / db_filename)
             else:
-                # Fallback if klauss not found
+                # Fallback if no project root found
                 config.database.path = "claude_tasks.db"
 
         return config
