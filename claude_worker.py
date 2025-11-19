@@ -70,6 +70,14 @@ class ClaudeWorker:
         self.heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         self.heartbeat_thread.start()
 
+    def log_progress(self, message: str, task_id: Optional[int] = None, level: str = 'info'):
+        """Log progress message to database for real-time visibility"""
+        try:
+            self.queue.log_worker_progress(self.worker_id, message, task_id, level)
+        except Exception as e:
+            # Don't fail the task if logging fails
+            print(f"[{self.worker_id}] [WARNING] Failed to log progress: {e}", file=sys.stderr)
+
     def execute_task(self, task: Dict) -> Dict:
         """Execute a task using Claude Code"""
         task_id = task['id']
@@ -85,6 +93,7 @@ class ClaudeWorker:
         auto_verify = metadata.get('auto_verify', True)  # Auto-detect and verify by default
 
         print(f"[{self.worker_id}] Executing task {task_id}: {prompt[:50]}...")
+        self.log_progress(f"Executing: {prompt[:60]}...", task_id=task_id)
 
         # Build comprehensive prompt with context
         full_prompt = f"Task ID: {task_id}\n\n"
@@ -279,10 +288,12 @@ class ClaudeWorker:
                 task_preview = task['prompt'][:60] + "..." if len(task['prompt']) > 60 else task['prompt']
                 print(f"[{self.worker_id}] [CLAIM] ✅ Claimed task {task['id']}")
                 print(f"[{self.worker_id}] [CLAIM] Prompt: {task_preview}")
+                self.log_progress(f"Claimed: {task_preview}", task_id=task['id'])
 
                 # Mark as in progress
                 self.queue.start_task(task['id'], self.worker_id)
                 print(f"[{self.worker_id}] [EXEC] Executing task {task['id']}...")
+                self.log_progress("Executing task with Claude CLI", task_id=task['id'])
 
                 # Execute
                 result = self.execute_task(task)
@@ -291,11 +302,13 @@ class ClaudeWorker:
                 if result.get('error'):
                     print(f"[{self.worker_id}] [FAIL] ❌ Task {task['id']} failed")
                     print(f"[{self.worker_id}] [FAIL] Error: {result['error']}")
+                    self.log_progress(f"Task failed: {result['error'][:100]}", task_id=task['id'], level='error')
                     self.queue.fail_task(task['id'], self.worker_id, result['error'])
                 else:
                     print(f"[{self.worker_id}] [COMPLETE] ✅ Task {task['id']} completed successfully")
                     if result.get('return_code') is not None:
                         print(f"[{self.worker_id}] [COMPLETE] Exit code: {result['return_code']}")
+                    self.log_progress("Task completed successfully", task_id=task['id'])
                     self.queue.complete_task(task['id'], self.worker_id, result)
 
                 self.current_task_id = None
