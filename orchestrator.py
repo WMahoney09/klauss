@@ -14,6 +14,8 @@ from pathlib import Path
 
 from claude_queue import TaskQueue
 from config import Config, ProjectBoundaryError
+from verification import VerificationHook
+from utils import is_interactive, get_env_int, get_env_bool
 
 class ClaudeOrchestrator:
     """
@@ -132,12 +134,22 @@ class ClaudeOrchestrator:
 
         Args:
             count: Number of workers to start
-            ask_permission: If True, prompt user for confirmation
+            ask_permission: If True, prompt user for confirmation (only in interactive mode)
 
         Returns:
             True if workers started, False if user declined or error
+
+        Environment Variables:
+            KLAUSS_AUTO_START_WORKERS: If 'true', auto-start workers without prompting (default: false)
         """
-        if ask_permission:
+        # Check if we should skip permission prompt
+        auto_start = get_env_bool('KLAUSS_AUTO_START_WORKERS', default=False)
+        interactive = is_interactive()
+
+        # Skip prompt if: auto_start enabled OR non-interactive mode
+        should_prompt = ask_permission and interactive and not auto_start
+
+        if should_prompt:
             response = input(
                 f"\n💡 I'd like to start {count} workers for parallel execution.\n"
                 f"   This will spawn {count} Claude Code instances to work simultaneously.\n"
@@ -147,6 +159,9 @@ class ClaudeOrchestrator:
             if response not in ['y', 'yes']:
                 print("⏭️  Skipping parallel execution (workers not started)")
                 return False
+        elif not interactive:
+            # In non-interactive mode, inform user via logs
+            print(f"🤖 Non-interactive mode detected - auto-starting {count} workers")
 
         print(f"🚀 Starting {count} workers...")
 
@@ -195,6 +210,10 @@ class ClaudeOrchestrator:
 
         Returns:
             True if workers are available, False otherwise
+
+        Environment Variables:
+            KLAUSS_WORKERS: Override optimal worker count (default: auto-calculated)
+            KLAUSS_AUTO_START_WORKERS: If 'true', auto-start workers without prompting
         """
         # Check current workers
         current_workers = self.check_workers_running()
@@ -203,12 +222,18 @@ class ClaudeOrchestrator:
             print(f"✓ {current_workers} workers already running")
             return True
 
-        # Calculate optimal worker count
-        optimal = self.calculate_optimal_workers(job_id)
+        # Check for environment variable override
+        env_workers = get_env_int('KLAUSS_WORKERS')
 
-        print(f"\n📊 Job Analysis:")
-        print(f"   - {self.queue.get_job_stats(job_id)['pending']} tasks can run in parallel")
-        print(f"   - Suggesting {optimal} workers for optimal execution")
+        if env_workers is not None:
+            optimal = env_workers
+            print(f"\n📊 Using KLAUSS_WORKERS={optimal} from environment")
+        else:
+            # Calculate optimal worker count
+            optimal = self.calculate_optimal_workers(job_id)
+            print(f"\n📊 Job Analysis:")
+            print(f"   - {self.queue.get_job_stats(job_id)['pending']} tasks can run in parallel")
+            print(f"   - Suggesting {optimal} workers for optimal execution")
 
         # Prompt to start workers
         return self.start_workers(optimal, ask_permission=True)
@@ -306,6 +331,44 @@ class ClaudeOrchestrator:
         print(f"Created job {job_id}: {description}")
         return job_id
 
+    def set_shared_context(self, key: str, value: str, job_id: Optional[str] = None):
+        """
+        Set shared context for worker coordination
+
+        Workers will automatically receive these conventions in their prompts to ensure
+        consistent output across parallel tasks.
+
+        Args:
+            key: Context key (e.g., "css_imports", "type_import_style")
+            value: Context value (e.g., "Use @import statements", "Use 'import type' syntax")
+            job_id: Optional job ID (uses current job if None, global if not in a job)
+
+        Example:
+            orch.set_shared_context("naming_convention", "Use camelCase for functions")
+            orch.set_shared_context("import_style", "Use ES6 imports", job_id=job)
+        """
+        if job_id is None:
+            job_id = self.current_job_id
+
+        self.queue.set_shared_context(key, value, job_id)
+        scope = f"job {job_id}" if job_id else "global"
+        print(f"  📝 Set shared context [{scope}]: {key} = {value[:50]}...")
+
+    def get_shared_context(self, job_id: Optional[str] = None) -> Dict[str, str]:
+        """
+        Get shared context for a job (includes job-specific + global context)
+
+        Args:
+            job_id: Optional job ID (uses current job if None)
+
+        Returns:
+            Dict of context key-value pairs
+        """
+        if job_id is None:
+            job_id = self.current_job_id
+
+        return self.queue.get_shared_context(job_id)
+
     def add_subtask(self, job_id: str, prompt: str,
                    working_dir: Optional[str] = None,
                    context_files: Optional[List[str]] = None,
@@ -315,7 +378,10 @@ class ClaudeOrchestrator:
                    metadata: Optional[Dict] = None,
                    allow_external: bool = False,
                    max_retries: int = 0,
-                   retry_policy: Optional[Dict] = None) -> int:
+                   retry_policy: Optional[Dict] = None,
+                   depends_on: Optional[List[int]] = None,
+                   verification_hooks: Optional[List[VerificationHook]] = None,
+                   auto_verify: bool = True) -> int:
         """
         Add a sub-task to a job
 
@@ -331,6 +397,9 @@ class ClaudeOrchestrator:
             allow_external: Allow this task to work outside project boundaries
             max_retries: Maximum number of retries on failure (default: 0)
             retry_policy: Retry policy configuration (e.g., {"backoff": "exponential"})
+            depends_on: List of task IDs this task depends on (will only be claimed when dependencies complete)
+            verification_hooks: List of verification hooks to run after task completion
+            auto_verify: Auto-detect project type and add verification hooks (default: True)
 
         Returns:
             Task ID
@@ -346,6 +415,11 @@ class ClaudeOrchestrator:
                 max_retries=2,
                 retry_policy={"backoff": "exponential"}
             )
+
+        Example with dependencies:
+            # Task 2 depends on Task 1 completing first
+            task1 = orch.add_subtask(job, "Build authentication module")
+            task2 = orch.add_subtask(job, "Write tests for authentication", depends_on=[task1])
         """
         # Use default priority from config if not specified
         if priority is None:
@@ -354,19 +428,39 @@ class ClaudeOrchestrator:
         # Validate working directory
         self.config.validate_working_dir(working_dir, allow_external)
 
+        # Prepare metadata with verification hooks
+        task_metadata = metadata.copy() if metadata else {}
+
+        # Add verification hooks to metadata
+        if verification_hooks:
+            task_metadata['verification_hooks'] = [h.to_dict() for h in verification_hooks]
+
+        # Set auto_verify flag
+        task_metadata['auto_verify'] = auto_verify
+
         # Add task to queue
         task_id = self.queue.add_task(
             prompt=prompt,
             working_dir=working_dir,
             context_files=context_files,
             expected_outputs=expected_outputs,
-            metadata=metadata,
+            metadata=task_metadata,
             priority=priority,
             job_id=job_id,
             parent_task_id=parent_task_id,
             max_retries=max_retries,
             retry_policy=retry_policy
         )
+
+        # Add dependencies if specified
+        if depends_on:
+            for dep_task_id in depends_on:
+                try:
+                    self.queue.add_task_dependency(task_id, dep_task_id)
+                    print(f"  └─ Task {task_id} depends on Task {dep_task_id}")
+                except ValueError as e:
+                    # Circular dependency or other validation error
+                    print(f"  ⚠️  Warning: Could not add dependency {dep_task_id} -> {task_id}: {e}")
 
         retry_info = f" (max {max_retries} retries)" if max_retries > 0 else ""
         print(f"  └─ Task {task_id}: {prompt[:60]}...{retry_info}")

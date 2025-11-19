@@ -17,6 +17,12 @@ import signal
 
 from claude_queue import TaskQueue
 from config import Config
+from verification import (
+    TaskVerifier,
+    VerificationHook,
+    ProjectTypeDetector,
+    format_verification_error
+)
 
 class ClaudeWorker:
     def __init__(self, worker_id: str, db_path: Optional[str] = None, config: Optional[Config] = None):
@@ -64,6 +70,14 @@ class ClaudeWorker:
         self.heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         self.heartbeat_thread.start()
 
+    def log_progress(self, message: str, task_id: Optional[int] = None, level: str = 'info'):
+        """Log progress message to database for real-time visibility"""
+        try:
+            self.queue.log_worker_progress(self.worker_id, message, task_id, level)
+        except Exception as e:
+            # Don't fail the task if logging fails
+            print(f"[{self.worker_id}] [WARNING] Failed to log progress: {e}", file=sys.stderr)
+
     def execute_task(self, task: Dict) -> Dict:
         """Execute a task using Claude Code"""
         task_id = task['id']
@@ -72,10 +86,32 @@ class ClaudeWorker:
         context_files = json.loads(task['context_files']) if task['context_files'] else []
         expected_outputs = json.loads(task['expected_outputs']) if task['expected_outputs'] else []
 
+        # Parse metadata for verification hooks
+        metadata = json.loads(task['metadata']) if task['metadata'] else {}
+        verification_hooks_data = metadata.get('verification_hooks', [])
+        verification_hooks = [VerificationHook.from_dict(h) for h in verification_hooks_data]
+        auto_verify = metadata.get('auto_verify', True)  # Auto-detect and verify by default
+
         print(f"[{self.worker_id}] Executing task {task_id}: {prompt[:50]}...")
+        self.log_progress(f"Executing: {prompt[:60]}...", task_id=task_id)
+
+        # Get job_id for shared context
+        job_id = task.get('job_id')
 
         # Build comprehensive prompt with context
         full_prompt = f"Task ID: {task_id}\n\n"
+
+        # Inject shared context for worker coordination
+        if job_id:
+            shared_context = self.queue.get_shared_context(job_id=job_id)
+        else:
+            shared_context = self.queue.get_shared_context()
+
+        if shared_context:
+            full_prompt += "Project Conventions (follow these):\n"
+            for key, value in shared_context.items():
+                full_prompt += f"- {key}: {value}\n"
+            full_prompt += "\n"
 
         if context_files:
             full_prompt += "Context files to review:\n"
@@ -121,21 +157,48 @@ class ClaudeWorker:
                 output['error'] = error_msg
                 return output
 
-            # Check for expected output files (Issue #11 fix)
-            if expected_outputs:
-                output['expected_files_present'] = {}
-                missing_files = []
-                for expected_file in expected_outputs:
-                    file_path = Path(working_dir) / expected_file
-                    is_present = file_path.exists()
-                    output['expected_files_present'][expected_file] = is_present
-                    if not is_present:
-                        missing_files.append(expected_file)
+            # Initialize verifier
+            verifier = TaskVerifier(working_dir)
 
-                # Fail task if expected files are missing
-                if missing_files:
+            # Check for expected output files
+            missing_files = []
+            if expected_outputs:
+                print(f"[{self.worker_id}] [VERIFY] Checking expected outputs...")
+                all_exist, file_status = verifier.check_expected_outputs(expected_outputs)
+                output['expected_files_present'] = file_status
+
+                if not all_exist:
+                    missing_files = [f for f, exists in file_status.items() if not exists]
                     output['error'] = f"Expected output files not created: {', '.join(missing_files)}"
                     return output
+
+            # Auto-detect verification hooks if enabled and none provided
+            if auto_verify and not verification_hooks:
+                print(f"[{self.worker_id}] [VERIFY] Auto-detecting project type...")
+                project_types = ProjectTypeDetector.detect_project_types(working_dir)
+                if project_types:
+                    print(f"[{self.worker_id}] [VERIFY] Detected project types: {', '.join(project_types)}")
+                    verification_hooks = ProjectTypeDetector.get_default_hooks(project_types, working_dir)
+                    if verification_hooks:
+                        print(f"[{self.worker_id}] [VERIFY] Using {len(verification_hooks)} auto-detected hooks")
+
+            # Run verification hooks
+            if verification_hooks:
+                print(f"[{self.worker_id}] [VERIFY] Running {len(verification_hooks)} verification hooks...")
+                all_passed, verification_results = verifier.verify_task(verification_hooks)
+
+                # Store verification results in output
+                output['verification_results'] = [r.to_dict() for r in verification_results]
+
+                if not all_passed:
+                    error_msg = format_verification_error(verification_results, missing_files)
+                    output['error'] = f"Verification failed:\n{error_msg}"
+                    print(f"[{self.worker_id}] [VERIFY] ❌ Verification failed")
+                    return output
+
+                print(f"[{self.worker_id}] [VERIFY] ✅ All verifications passed")
+            else:
+                print(f"[{self.worker_id}] [VERIFY] No verification hooks configured")
 
             return output
 
@@ -240,10 +303,12 @@ class ClaudeWorker:
                 task_preview = task['prompt'][:60] + "..." if len(task['prompt']) > 60 else task['prompt']
                 print(f"[{self.worker_id}] [CLAIM] ✅ Claimed task {task['id']}")
                 print(f"[{self.worker_id}] [CLAIM] Prompt: {task_preview}")
+                self.log_progress(f"Claimed: {task_preview}", task_id=task['id'])
 
                 # Mark as in progress
                 self.queue.start_task(task['id'], self.worker_id)
                 print(f"[{self.worker_id}] [EXEC] Executing task {task['id']}...")
+                self.log_progress("Executing task with Claude CLI", task_id=task['id'])
 
                 # Execute
                 result = self.execute_task(task)
@@ -252,11 +317,13 @@ class ClaudeWorker:
                 if result.get('error'):
                     print(f"[{self.worker_id}] [FAIL] ❌ Task {task['id']} failed")
                     print(f"[{self.worker_id}] [FAIL] Error: {result['error']}")
+                    self.log_progress(f"Task failed: {result['error'][:100]}", task_id=task['id'], level='error')
                     self.queue.fail_task(task['id'], self.worker_id, result['error'])
                 else:
                     print(f"[{self.worker_id}] [COMPLETE] ✅ Task {task['id']} completed successfully")
                     if result.get('return_code') is not None:
                         print(f"[{self.worker_id}] [COMPLETE] Exit code: {result['return_code']}")
+                    self.log_progress("Task completed successfully", task_id=task['id'])
                     self.queue.complete_task(task['id'], self.worker_id, result)
 
                 self.current_task_id = None
