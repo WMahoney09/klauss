@@ -9,11 +9,13 @@ import sys
 import subprocess
 import time
 import signal
+import argparse
 from typing import List, Dict, Optional
 from pathlib import Path
 
 from claude_queue import TaskQueue
 from config import Config
+from utils import get_env_int, get_env_str
 
 class ClaudeCoordinator:
     def __init__(self, num_workers: int = 4, db_path: Optional[str] = None,
@@ -193,10 +195,74 @@ class ClaudeCoordinator:
 
 
 if __name__ == '__main__':
-    num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Claude Code Parallel Task Coordinator',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Environment Variables:
+  KLAUSS_WORKERS       Number of workers to spawn (default: 4)
+  KLAUSS_DB_PATH       Path to task database (default: auto-detected)
 
-    # Explicit db_path argument takes precedence over config
-    db_path = sys.argv[2] if len(sys.argv) > 2 else None
+Examples:
+  # Start 10 workers
+  python3 claude_coordinator.py --workers 10
+
+  # Start workers with custom database
+  python3 claude_coordinator.py --workers 5 --db tasks.db
+
+  # Use environment variables
+  KLAUSS_WORKERS=10 KLAUSS_DB_PATH=tasks.db python3 claude_coordinator.py
+        '''
+    )
+
+    parser.add_argument(
+        'workers',
+        nargs='?',
+        type=int,
+        help='Number of workers to spawn (overrides KLAUSS_WORKERS)'
+    )
+    parser.add_argument(
+        'db_path',
+        nargs='?',
+        help='Path to task database (overrides KLAUSS_DB_PATH)'
+    )
+    parser.add_argument(
+        '--workers', '-w',
+        dest='workers_flag',
+        type=int,
+        help='Number of workers to spawn (alternative to positional argument)'
+    )
+    parser.add_argument(
+        '--db', '--db-path',
+        dest='db_path_flag',
+        help='Path to task database (alternative to positional argument)'
+    )
+
+    args = parser.parse_args()
+
+    # Determine worker count with precedence:
+    # 1. --workers flag
+    # 2. Positional argument
+    # 3. KLAUSS_WORKERS environment variable
+    # 4. Default (4)
+    num_workers = (
+        args.workers_flag or
+        args.workers or
+        get_env_int('KLAUSS_WORKERS') or
+        4
+    )
+
+    # Determine database path with precedence:
+    # 1. --db flag
+    # 2. Positional argument
+    # 3. KLAUSS_DB_PATH environment variable
+    # 4. None (will use config auto-detection)
+    db_path = (
+        args.db_path_flag or
+        args.db_path or
+        get_env_str('KLAUSS_DB_PATH')
+    )
 
     print("=" * 60)
     print("Claude Code Parallel Task Coordinator")
