@@ -98,9 +98,11 @@ Claude Code: 🚀 Starting 6 workers...
 - **🚀 Faster execution** - Complex tasks complete in parallel
 - **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
 - **👀 Visibility** - Real-time dashboard shows parallel progress
-- **🔄 Automatic coordination** - Workers sync through shared queue
+- **🔄 Automatic coordination** - Workers sync through shared queue and conventions
+- **🎯 Consistent output** - Shared context ensures workers follow same patterns
+- **📊 Task dependencies** - Define execution order with automatic dependency resolution
+- **🛡️ Safety** - Project boundaries enforced by default, circular dependency detection
 - **✅ Quality verification** - Tasks auto-verified before marked complete
-- **🛡️ Safety** - Project boundaries enforced by default
 - **📦 Portable** - Add to any project via git submodule
 
 ## ✅ Task Verification & Quality Gates
@@ -215,10 +217,32 @@ You: "Build a user authentication system with:
 
 Claude: This is complex - I'll use parallel execution...
         [Breaks down into 15+ sub-tasks]
+        [Sets shared context for consistent patterns]
+        [Defines dependencies between tasks]
         [Shows real-time progress]
-        [Workers complete tasks simultaneously]
+        [Workers complete tasks simultaneously in correct order]
         [10 minutes later]
         Complete! Built full auth system with all features...
+```
+
+### Coordinated Parallel Development
+```
+You: "Build a TypeScript library with multiple modules,
+      all following the same import patterns and testing style"
+
+Claude: I'll coordinate workers to ensure consistency...
+        [Sets shared conventions:]
+        - import_style: "Use 'import type' for TypeScript types"
+        - export_style: "Use named exports"
+        - testing: "Use Jest with .test.ts extension"
+
+        [Creates dependency chain:]
+        - Core modules build in parallel
+        - Feature modules wait for core
+        - Tests run after all modules complete
+
+        [Workers execute with consistent patterns]
+        Result: Well-structured, consistent codebase!
 ```
 
 ## 🎛️ Monitoring

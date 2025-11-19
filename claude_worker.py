@@ -95,8 +95,23 @@ class ClaudeWorker:
         print(f"[{self.worker_id}] Executing task {task_id}: {prompt[:50]}...")
         self.log_progress(f"Executing: {prompt[:60]}...", task_id=task_id)
 
+        # Get job_id for shared context
+        job_id = task.get('job_id')
+
         # Build comprehensive prompt with context
         full_prompt = f"Task ID: {task_id}\n\n"
+
+        # Inject shared context for worker coordination
+        if job_id:
+            shared_context = self.queue.get_shared_context(job_id=job_id)
+        else:
+            shared_context = self.queue.get_shared_context()
+
+        if shared_context:
+            full_prompt += "Project Conventions (follow these):\n"
+            for key, value in shared_context.items():
+                full_prompt += f"- {key}: {value}\n"
+            full_prompt += "\n"
 
         if context_files:
             full_prompt += "Context files to review:\n"

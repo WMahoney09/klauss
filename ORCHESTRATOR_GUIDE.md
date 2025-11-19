@@ -142,6 +142,93 @@ synthesis = orch.synthesize_results(
 print(synthesis)
 ```
 
+## Worker Coordination Features
+
+### Shared Context
+
+Workers executing tasks in parallel can produce inconsistent outputs (e.g., different import styles, naming conventions). Use **shared context** to ensure all workers follow the same conventions:
+
+```python
+orch = ClaudeOrchestrator("coordinator")
+job = orch.create_job("Build user dashboard with multiple components")
+
+# Set shared conventions that all workers will receive
+orch.set_shared_context("import_style", "Use ES6 imports with destructuring")
+orch.set_shared_context("css_pattern", "Use CSS modules with .module.css extension")
+orch.set_shared_context("naming_convention", "Use camelCase for functions, PascalCase for components")
+
+# Add tasks - workers will automatically receive these conventions
+orch.add_subtask(job, "Create UserProfile component")
+orch.add_subtask(job, "Create UserSettings component")
+orch.add_subtask(job, "Create UserActivity component")
+
+results = orch.wait_and_collect(job)
+```
+
+**How it works:**
+- Context is automatically injected into worker prompts as "Project Conventions (follow these):"
+- Workers see these conventions before receiving their task instructions
+- Ensures consistent styling, naming, and patterns across parallel work
+
+**Context Scope:**
+```python
+# Global context (applies to all jobs)
+orch.set_shared_context("code_style", "Follow PEP 8")
+
+# Job-specific context (only for this job)
+orch.set_shared_context("api_version", "v2", job_id=job)
+```
+
+### Task Dependencies
+
+When tasks must execute in a specific order, use **dependencies** to ensure workers respect execution sequences:
+
+```python
+orch = ClaudeOrchestrator("coordinator")
+job = orch.create_job("Build and test authentication module")
+
+# Define execution order
+task1 = orch.add_subtask(job, "Implement authentication module", priority=10)
+task2 = orch.add_subtask(job, "Write unit tests", priority=8, depends_on=[task1])
+task3 = orch.add_subtask(job, "Write integration tests", priority=8, depends_on=[task1])
+task4 = orch.add_subtask(job, "Generate API docs", priority=5, depends_on=[task1, task2, task3])
+
+# Task 1 executes first
+# Tasks 2 and 3 execute in parallel after Task 1 completes
+# Task 4 executes only after all previous tasks complete
+```
+
+**Benefits:**
+- Workers automatically respect dependencies (won't claim tasks with unmet dependencies)
+- Circular dependencies are detected and rejected
+- Enables sequential workflows within parallel execution
+
+**Complex Dependency Graph:**
+```python
+# Build a pipeline with multiple stages
+job = orch.create_job("Multi-stage deployment pipeline")
+
+# Stage 1: Parallel builds
+backend = orch.add_subtask(job, "Build backend service")
+frontend = orch.add_subtask(job, "Build frontend app")
+worker = orch.add_subtask(job, "Build worker service")
+
+# Stage 2: Tests (depend on builds)
+backend_tests = orch.add_subtask(job, "Run backend tests", depends_on=[backend])
+frontend_tests = orch.add_subtask(job, "Run frontend tests", depends_on=[frontend])
+worker_tests = orch.add_subtask(job, "Run worker tests", depends_on=[worker])
+
+# Stage 3: Integration tests (depend on all component tests)
+integration = orch.add_subtask(
+    job,
+    "Run integration tests",
+    depends_on=[backend_tests, frontend_tests, worker_tests]
+)
+
+# Stage 4: Deployment (depends on all tests passing)
+deploy = orch.add_subtask(job, "Deploy to staging", depends_on=[integration])
+```
+
 ## Common Patterns
 
 ### Pattern 1: Simple Parallel Execution
@@ -161,7 +248,7 @@ results = orch.wait_and_collect(job)
 
 ### Pattern 2: Hierarchical Decomposition
 
-When some tasks depend on others:
+When some tasks depend on others, use **dependencies** or **parent_task_id** (or both):
 
 ```python
 orch = ClaudeOrchestrator("hierarchical")
@@ -170,23 +257,33 @@ job = orch.create_job("Build and test API")
 # Parent task
 api_task = orch.add_subtask(job, "Implement REST API", priority=10)
 
-# Child tasks (depend on parent)
+# Child tasks using dependencies (workers respect execution order)
 orch.add_subtask(
     job,
     "Write API tests",
     priority=5,
-    parent_task_id=api_task  # Links to parent
+    depends_on=[api_task]  # Won't execute until api_task completes
 )
 
 orch.add_subtask(
     job,
     "Generate API documentation",
     priority=3,
-    parent_task_id=api_task
+    depends_on=[api_task]  # Won't execute until api_task completes
+)
+
+# Or use parent_task_id for logical grouping (doesn't enforce order)
+orch.add_subtask(
+    job,
+    "Create API monitoring dashboard",
+    priority=2,
+    parent_task_id=api_task  # Logical grouping only
 )
 
 results = orch.wait_and_collect(job)
 ```
+
+**Note:** `parent_task_id` is for logical grouping and metadata only. Use `depends_on` to enforce execution order.
 
 ### Pattern 3: Adaptive Workflow
 
@@ -237,6 +334,50 @@ results = quick_delegate([
 ])
 
 # That's it! Results collected automatically
+```
+
+### Pattern 5: Coordinated Parallel Development
+
+Combine **shared context** and **dependencies** for consistent, ordered parallel work:
+
+```python
+orch = ClaudeOrchestrator("coordinated")
+job = orch.create_job("Build multi-module TypeScript library")
+
+# Set shared conventions for all workers
+orch.set_shared_context("import_style", "Use 'import type' for TypeScript types")
+orch.set_shared_context("export_style", "Use named exports, not default exports")
+orch.set_shared_context("testing", "Use Jest with .test.ts extension")
+orch.set_shared_context("docs", "Include JSDoc comments for all public functions")
+
+# Stage 1: Core modules (parallel)
+core_auth = orch.add_subtask(job, "Create auth module with user validation")
+core_data = orch.add_subtask(job, "Create data module with CRUD operations")
+core_utils = orch.add_subtask(job, "Create utils module with helper functions")
+
+# Stage 2: Feature modules (depend on core, parallel with each other)
+feature_api = orch.add_subtask(
+    job,
+    "Create API client module",
+    depends_on=[core_auth, core_data]
+)
+feature_ui = orch.add_subtask(
+    job,
+    "Create UI helpers module",
+    depends_on=[core_utils]
+)
+
+# Stage 3: Integration (depends on all features)
+integration = orch.add_subtask(
+    job,
+    "Create integration tests for all modules",
+    depends_on=[feature_api, feature_ui]
+)
+
+# All workers receive shared conventions automatically
+# Dependencies ensure correct execution order
+# Result: Consistent, well-tested codebase
+results = orch.wait_and_collect(job)
 ```
 
 ## Advanced Features
