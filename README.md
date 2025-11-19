@@ -338,6 +338,88 @@ Klauss works out-of-the-box with zero configuration. For advanced use:
 
 See [Configuration Guide](#configuration) for details.
 
+## 🤖 Non-Interactive Mode & Environment Variables
+
+Klauss supports running in non-interactive contexts like CI/CD, Docker containers, and background jobs without prompting for user input.
+
+### Environment Variables
+
+Configure Klauss behavior via environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `KLAUSS_WORKERS` | Number of workers to spawn | Auto-calculated based on tasks |
+| `KLAUSS_DB_PATH` | Path to task database | Auto-detected from project |
+| `KLAUSS_AUTO_START_WORKERS` | Auto-start workers without prompting (`true`/`false`) | `false` |
+
+### Non-Interactive Detection
+
+Klauss automatically detects non-interactive contexts (no TTY) and:
+- Skips user prompts
+- Uses environment variable defaults
+- Auto-starts workers when `KLAUSS_AUTO_START_WORKERS=true`
+
+### Usage Examples
+
+#### CI/CD Pipeline
+```bash
+# .github/workflows/claude-tasks.yml
+- name: Run KLAUSS tasks
+  env:
+    KLAUSS_WORKERS: 10
+    KLAUSS_AUTO_START_WORKERS: true
+  run: |
+    python3 orchestrator_script.py
+```
+
+#### Docker Container
+```dockerfile
+# Dockerfile
+ENV KLAUSS_WORKERS=8
+ENV KLAUSS_AUTO_START_WORKERS=true
+ENV KLAUSS_DB_PATH=/app/tasks.db
+
+CMD ["python3", "orchestrator_script.py"]
+```
+
+#### Background Job
+```bash
+# Run in background without prompts
+KLAUSS_AUTO_START_WORKERS=true KLAUSS_WORKERS=5 python3 build_project.py &
+```
+
+#### Coordinator CLI
+
+The coordinator supports both positional arguments and flags:
+
+```bash
+# Using environment variables
+export KLAUSS_WORKERS=10
+export KLAUSS_DB_PATH=tasks.db
+python3 klauss/claude_coordinator.py
+
+# Using CLI flags
+python3 klauss/claude_coordinator.py --workers 10 --db tasks.db
+
+# Using positional arguments (legacy)
+python3 klauss/claude_coordinator.py 10 tasks.db
+
+# Get help
+python3 klauss/claude_coordinator.py --help
+```
+
+### Interactive Mode (Default)
+
+When running in a terminal (TTY), Klauss will:
+- Prompt for confirmation before starting workers
+- Display interactive progress
+- Allow manual control
+
+To force auto-start even in interactive mode:
+```bash
+KLAUSS_AUTO_START_WORKERS=true python3 orchestrator_script.py
+```
+
 ## 📚 Documentation
 
 - **[ORCHESTRATOR_GUIDE.md](ORCHESTRATOR_GUIDE.md)** - For Claude Code: How to use Klauss internally
