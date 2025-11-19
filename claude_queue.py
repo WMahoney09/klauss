@@ -20,6 +20,8 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    PAUSED = "paused"  # Hit session limit, can be resumed
+    RESUMING = "resuming"  # Worker is resuming from checkpoint
 
 class TaskQueue:
     def __init__(self, db_path: str = "claude_tasks.db"):
@@ -56,6 +58,10 @@ class TaskQueue:
                 result TEXT,  -- JSON with results/outputs
                 error TEXT,
                 priority INTEGER DEFAULT 0,
+                retry_count INTEGER DEFAULT 0,  -- Number of retry attempts
+                max_retries INTEGER DEFAULT 0,  -- Maximum allowed retries
+                last_error TEXT,  -- Error from last failed attempt
+                retry_policy TEXT,  -- JSON with retry configuration
                 FOREIGN KEY (parent_task_id) REFERENCES tasks(id)
             )
         """)
@@ -93,6 +99,40 @@ class TaskQueue:
             ON tasks(job_id, status)
         """)
 
+        # Checkpoints table for pause/resume functionality
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                task_id INTEGER PRIMARY KEY,
+                checkpoint_data TEXT NOT NULL,  -- JSON blob with progress data
+                files_created TEXT,  -- JSON array of files created
+                files_modified TEXT,  -- JSON array of files modified
+                last_step TEXT,  -- Description of last completed step
+                completion_percentage INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+
+        # Task changes table for rollback support
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_changes (
+                change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                operation TEXT NOT NULL,  -- 'create', 'modify', 'delete'
+                file_path TEXT NOT NULL,
+                before_content TEXT,  -- For rollback (NULL for create)
+                after_content TEXT,  -- For rollback (NULL for delete)
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_task_changes
+            ON task_changes(task_id, timestamp)
+        """)
+
         # Shared context for worker coordination
         conn.execute("""
             CREATE TABLE IF NOT EXISTS shared_context (
@@ -103,8 +143,14 @@ class TaskQueue:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(job_id, key)
+            )
         """)
-        
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_shared_context_job
+            ON shared_context(job_id)
+        """)
+
         # Worker logs for progress visibility
         conn.execute("""
             CREATE TABLE IF NOT EXISTS worker_logs (
@@ -113,14 +159,19 @@ class TaskQueue:
                 task_id INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 message TEXT NOT NULL,
-                level TEXT DEFAULT 'info',  -- 'info', 'warning', 'error'
+                level TEXT DEFAULT 'info',
                 FOREIGN KEY (task_id) REFERENCES tasks(id)
             )
         """)
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_shared_context_job
-            ON shared_context(job_id)
+            CREATE INDEX IF NOT EXISTS idx_worker_logs_task
+            ON worker_logs(task_id, timestamp)
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_worker_logs_worker
+            ON worker_logs(worker_id, timestamp DESC)
         """)
 
         # Task dependencies
@@ -138,13 +189,6 @@ class TaskQueue:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_task_dependencies
             ON task_dependencies(task_id)
-            CREATE INDEX IF NOT EXISTS idx_worker_logs_task
-            ON worker_logs(task_id, timestamp)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_worker_logs_worker
-            ON worker_logs(worker_id, timestamp DESC)
         """)
 
         conn.commit()
@@ -364,13 +408,33 @@ class TaskQueue:
                  metadata: Optional[Dict] = None,
                  priority: int = 0,
                  job_id: Optional[str] = None,
-                 parent_task_id: Optional[int] = None) -> int:
-        """Add a new task to the queue"""
+                 parent_task_id: Optional[int] = None,
+                 max_retries: int = 0,
+                 retry_policy: Optional[Dict] = None) -> int:
+        """
+        Add a new task to the queue
+
+        Args:
+            prompt: Task prompt/instruction
+            working_dir: Working directory for task execution
+            context_files: Files to provide as context
+            expected_outputs: Expected output files
+            metadata: Additional task metadata
+            priority: Task priority (higher = executed first)
+            job_id: Job ID this task belongs to
+            parent_task_id: Parent task ID for hierarchical tasks
+            max_retries: Maximum number of retries on failure (default: 0)
+            retry_policy: Retry policy configuration (e.g., {"backoff": "exponential"})
+
+        Returns:
+            Task ID
+        """
         conn = self._get_conn()
         cursor = conn.execute("""
             INSERT INTO tasks (prompt, working_dir, context_files,
-                             expected_outputs, metadata, priority, job_id, parent_task_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             expected_outputs, metadata, priority, job_id, parent_task_id,
+                             max_retries, retry_policy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             prompt,
             working_dir,
@@ -379,7 +443,9 @@ class TaskQueue:
             json.dumps(metadata) if metadata else None,
             priority,
             job_id,
-            parent_task_id
+            parent_task_id,
+            max_retries,
+            json.dumps(retry_policy) if retry_policy else None
         ))
         conn.commit()
         return cursor.lastrowid
@@ -388,6 +454,7 @@ class TaskQueue:
         """
         Atomically claim the next available task
 
+        Prioritizes pending tasks first, then paused tasks that can be resumed.
         Only claims tasks whose dependencies are met (all dependent tasks completed).
 
         Args:
@@ -401,12 +468,19 @@ class TaskQueue:
         # Use transaction to ensure atomicity
         conn.execute("BEGIN EXCLUSIVE")
         try:
-            # Get pending tasks ordered by priority
+            # Get pending OR paused tasks ordered by priority
+            # Pending tasks have priority over paused ones
             # We'll check dependencies for each until we find one we can claim
             cursor = conn.execute("""
                 SELECT * FROM tasks
-                WHERE status = 'pending'
-                ORDER BY priority DESC, created_at ASC
+                WHERE status IN ('pending', 'paused')
+                ORDER BY
+                    CASE status
+                        WHEN 'pending' THEN 0
+                        WHEN 'paused' THEN 1
+                    END,
+                    priority DESC,
+                    created_at ASC
                 LIMIT 10
             """)
             tasks = cursor.fetchall()
@@ -418,12 +492,15 @@ class TaskQueue:
             # Find first task with met dependencies
             for task in tasks:
                 if self.are_dependencies_met(task['id']):
+                    # Determine new status based on current status
+                    new_status = 'claimed' if task['status'] == 'pending' else 'resuming'
+
                     # Claim it
                     conn.execute("""
                         UPDATE tasks
-                        SET status = 'claimed', worker_id = ?, claimed_at = ?
+                        SET status = ?, worker_id = ?, claimed_at = ?
                         WHERE id = ?
-                    """, (worker_id, datetime.now(), task['id']))
+                    """, (new_status, worker_id, datetime.now(), task['id']))
 
                     conn.commit()
                     return dict(task)
@@ -456,15 +533,33 @@ class TaskQueue:
         """, (datetime.now(), json.dumps(result) if result else None, task_id, worker_id))
         conn.commit()
 
-    def fail_task(self, task_id: int, worker_id: str, error: str):
-        """Mark task as failed"""
+    def fail_task(self, task_id: int, worker_id: str, error: str, auto_retry: bool = True):
+        """
+        Mark task as failed
+
+        If auto_retry is True and the task has retries remaining, it will automatically
+        be reset to 'pending' with error context included in the prompt.
+
+        Args:
+            task_id: Task ID
+            worker_id: Worker ID
+            error: Error message
+            auto_retry: Automatically retry if retries remaining (default: True)
+        """
         conn = self._get_conn()
+
+        # Update task status and error
         conn.execute("""
             UPDATE tasks
-            SET status = 'failed', completed_at = ?, error = ?
+            SET status = 'failed', completed_at = ?, error = ?, last_error = ?
             WHERE id = ? AND worker_id = ?
-        """, (datetime.now(), error, task_id, worker_id))
+        """, (datetime.now(), error, error, task_id, worker_id))
         conn.commit()
+
+        # Check if should auto-retry
+        if auto_retry and self.should_retry_task(task_id):
+            print(f"[TaskQueue] Auto-retrying task {task_id} (has retries remaining)")
+            self.retry_task(task_id, include_error_context=True)
 
     def register_worker(self, worker_id: str):
         """Register a new worker"""
@@ -667,6 +762,137 @@ class TaskQueue:
         """
         return self.get_all_workers()
 
+    # Public API Methods (for external access)
+
+    def get_connection(self):
+        """
+        Get database connection for custom queries
+
+        Returns:
+            sqlite3.Connection with row_factory set
+
+        Example:
+            ```python
+            conn = queue.get_connection()
+            cursor = conn.execute("SELECT * FROM tasks WHERE priority > 5")
+            tasks = [dict(row) for row in cursor.fetchall()]
+            ```
+        """
+        return self._get_conn()
+
+    def log_worker_progress(self, worker_id: str, message: str,
+                           task_id: Optional[int] = None, level: str = 'info'):
+        """
+        Log worker progress message for real-time visibility
+
+        Args:
+            worker_id: Worker ID
+            message: Progress message
+            task_id: Optional task ID being worked on
+            level: Log level ('info', 'warning', 'error')
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO worker_logs (worker_id, task_id, message, level)
+            VALUES (?, ?, ?, ?)
+        """, (worker_id, task_id, message, level))
+        conn.commit()
+
+    def get_worker_logs(self, worker_id: Optional[str] = None,
+                       task_id: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        """
+        Get worker progress logs
+
+        Args:
+            worker_id: Optional worker ID filter
+            task_id: Optional task ID filter
+            limit: Maximum number of logs to return
+
+        Returns:
+            List of log dictionaries
+        """
+        conn = self._get_conn()
+
+        if worker_id and task_id:
+            query = """
+                SELECT * FROM worker_logs
+                WHERE worker_id = ? AND task_id = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            params = (worker_id, task_id, limit)
+        elif worker_id:
+            query = """
+                SELECT * FROM worker_logs
+                WHERE worker_id = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            params = (worker_id, limit)
+        elif task_id:
+            query = """
+                SELECT * FROM worker_logs
+                WHERE task_id = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            params = (task_id, limit)
+        else:
+            query = """
+                SELECT * FROM worker_logs
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            params = (limit,)
+
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_active_progress(self) -> List[Dict]:
+        """
+        Get current progress across all active workers
+
+        Returns:
+            List of worker progress dictionaries with recent activity
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT w.worker_id, w.status, w.current_task_id,
+                   t.prompt as current_task_prompt,
+                   (SELECT message FROM worker_logs
+                    WHERE worker_id = w.worker_id
+                    ORDER BY timestamp DESC LIMIT 1) as last_message
+            FROM workers w
+            LEFT JOIN tasks t ON w.current_task_id = t.id
+            WHERE w.status = 'active'
+            ORDER BY w.last_heartbeat DESC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_job_progress(self, job_id: str) -> Dict:
+        """
+        Get detailed progress information for a specific job
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Dictionary with job progress details
+        """
+        stats = self.get_job_stats(job_id)
+        tasks = self.get_job_tasks(job_id)
+
+        return {
+            'job_id': job_id,
+            'stats': stats,
+            'total_tasks': len(tasks),
+            'task_summaries': [
+                {
+                    'id': t['id'],
+                    'prompt': t['prompt'][:60],
+                    'status': t['status'],
+                    'priority': t['priority']
+                }
+                for t in tasks
+            ]
+        }
+
     # Shared Context API
 
     def set_shared_context(self, key: str, value: str, job_id: Optional[str] = None):
@@ -703,6 +929,423 @@ class TaskQueue:
                 updated_at = CURRENT_TIMESTAMP
         """, (job_id, key, value))
         conn.commit()
+
+    # Checkpoint API for pause/resume functionality
+
+    def save_checkpoint(self, task_id: int, checkpoint_data: Dict,
+                       files_created: Optional[List[str]] = None,
+                       files_modified: Optional[List[str]] = None,
+                       last_step: Optional[str] = None,
+                       completion_percentage: int = 0):
+        """
+        Save checkpoint data for a task (for pause/resume)
+
+        Args:
+            task_id: Task ID
+            checkpoint_data: Arbitrary checkpoint data (will be JSON-encoded)
+            files_created: List of files created so far
+            files_modified: List of files modified so far
+            last_step: Description of last completed step
+            completion_percentage: Estimated completion percentage (0-100)
+
+        Example:
+            ```python
+            queue.save_checkpoint(
+                task_id=5,
+                checkpoint_data={"current_phase": "testing", "tests_passed": 3},
+                files_created=["src/component.tsx"],
+                files_modified=["src/App.tsx"],
+                last_step="Created component structure, starting tests",
+                completion_percentage=60
+            )
+            ```
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT OR REPLACE INTO checkpoints
+            (task_id, checkpoint_data, files_created, files_modified,
+             last_step, completion_percentage, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            task_id,
+            json.dumps(checkpoint_data),
+            json.dumps(files_created) if files_created else None,
+            json.dumps(files_modified) if files_modified else None,
+            last_step,
+            completion_percentage,
+            datetime.now()
+        ))
+        conn.commit()
+
+    def get_checkpoint(self, task_id: int) -> Optional[Dict]:
+        """
+        Get checkpoint data for a task
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            Checkpoint data dictionary or None if no checkpoint exists
+
+        Example:
+            ```python
+            checkpoint = queue.get_checkpoint(task_id=5)
+            if checkpoint:
+                print(f"Last step: {checkpoint['last_step']}")
+                print(f"Progress: {checkpoint['completion_percentage']}%")
+            ```
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT * FROM checkpoints WHERE task_id = ?
+        """, (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            'task_id': row['task_id'],
+            'checkpoint_data': json.loads(row['checkpoint_data']) if row['checkpoint_data'] else {},
+            'files_created': json.loads(row['files_created']) if row['files_created'] else [],
+            'files_modified': json.loads(row['files_modified']) if row['files_modified'] else [],
+            'last_step': row['last_step'],
+            'completion_percentage': row['completion_percentage'],
+            'created_at': row['created_at'],
+            'updated_at': row['updated_at']
+        }
+
+    def delete_checkpoint(self, task_id: int):
+        """
+        Delete checkpoint data for a task
+
+        Args:
+            task_id: Task ID
+        """
+        conn = self._get_conn()
+        conn.execute("DELETE FROM checkpoints WHERE task_id = ?", (task_id,))
+        conn.commit()
+
+    def pause_task(self, task_id: int, worker_id: str, checkpoint_data: Optional[Dict] = None):
+        """
+        Mark task as paused (typically due to session limit)
+
+        Args:
+            task_id: Task ID
+            worker_id: Worker ID that paused the task
+            checkpoint_data: Optional checkpoint data to save
+
+        Example:
+            ```python
+            # Worker detects approaching session limit
+            queue.pause_task(
+                task_id=5,
+                worker_id="worker_1",
+                checkpoint_data={
+                    "last_step": "Completed component creation",
+                    "next_step": "Add unit tests"
+                }
+            )
+            ```
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            UPDATE tasks
+            SET status = 'paused', worker_id = ?
+            WHERE id = ?
+        """, (worker_id, task_id))
+        conn.commit()
+
+        # Save checkpoint if provided
+        if checkpoint_data:
+            self.save_checkpoint(task_id, checkpoint_data)
+
+    def get_paused_tasks(self) -> List[Dict]:
+        """
+        Get all paused tasks that can be resumed
+
+        Returns:
+            List of paused task dictionaries
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT * FROM tasks
+            WHERE status = 'paused'
+            ORDER BY priority DESC, created_at ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    # Task changes API for rollback support
+
+    def track_file_change(self, task_id: int, operation: str, file_path: str,
+                         before_content: Optional[str] = None,
+                         after_content: Optional[str] = None):
+        """
+        Track a file change for rollback capability
+
+        Args:
+            task_id: Task ID
+            operation: Operation type ('create', 'modify', 'delete')
+            file_path: Path to the file
+            before_content: File content before change (for modify/delete)
+            after_content: File content after change (for create/modify)
+
+        Example:
+            ```python
+            # Track file creation
+            queue.track_file_change(
+                task_id=5,
+                operation='create',
+                file_path='src/NewComponent.tsx',
+                after_content='...'
+            )
+
+            # Track file modification
+            queue.track_file_change(
+                task_id=5,
+                operation='modify',
+                file_path='src/App.tsx',
+                before_content='...',
+                after_content='...'
+            )
+            ```
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO task_changes
+            (task_id, operation, file_path, before_content, after_content)
+            VALUES (?, ?, ?, ?, ?)
+        """, (task_id, operation, file_path, before_content, after_content))
+        conn.commit()
+
+    def get_task_changes(self, task_id: int) -> List[Dict]:
+        """
+        Get all file changes for a task
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            List of change dictionaries
+
+        Example:
+            ```python
+            changes = queue.get_task_changes(task_id=5)
+            for change in changes:
+                print(f"{change['operation']}: {change['file_path']}")
+            ```
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT * FROM task_changes
+            WHERE task_id = ?
+            ORDER BY timestamp ASC
+        """, (task_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def rollback_task(self, task_id: int) -> Dict:
+        """
+        Rollback all file changes for a task
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            Dictionary with rollback results
+
+        Example:
+            ```python
+            result = queue.rollback_task(task_id=5)
+            print(f"Files restored: {result['files_restored']}")
+            print(f"Files deleted: {result['files_deleted']}")
+            ```
+        """
+        changes = self.get_task_changes(task_id)
+
+        files_restored = []
+        files_deleted = []
+        errors = []
+
+        # Apply changes in reverse order
+        for change in reversed(changes):
+            file_path = Path(change['file_path'])
+
+            try:
+                if change['operation'] == 'create':
+                    # Delete created file
+                    if file_path.exists():
+                        file_path.unlink()
+                        files_deleted.append(str(file_path))
+
+                elif change['operation'] == 'modify':
+                    # Restore previous content
+                    if change['before_content'] is not None:
+                        file_path.write_text(change['before_content'])
+                        files_restored.append(str(file_path))
+
+                elif change['operation'] == 'delete':
+                    # Restore deleted file
+                    if change['before_content'] is not None:
+                        file_path.parent.mkdir(parents=True, exist_ok=True)
+                        file_path.write_text(change['before_content'])
+                        files_restored.append(str(file_path))
+
+            except Exception as e:
+                errors.append(f"{file_path}: {str(e)}")
+
+        return {
+            'files_restored': files_restored,
+            'files_deleted': files_deleted,
+            'errors': errors
+        }
+
+    # Retry logic API
+
+    def should_retry_task(self, task_id: int) -> bool:
+        """
+        Check if a failed task should be retried
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            True if task should be retried, False otherwise
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT retry_count, max_retries FROM tasks WHERE id = ?
+        """, (task_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return False
+
+        return row['retry_count'] < row['max_retries']
+
+    def increment_retry_count(self, task_id: int, error_message: str):
+        """
+        Increment retry count and update last_error for a task
+
+        Args:
+            task_id: Task ID
+            error_message: Error message from failed attempt
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            UPDATE tasks
+            SET retry_count = retry_count + 1,
+                last_error = ?
+            WHERE id = ?
+        """, (error_message, task_id))
+        conn.commit()
+
+    def retry_task(self, task_id: int, include_error_context: bool = True) -> Optional[int]:
+        """
+        Create a retry attempt for a failed task
+
+        Resets task status to 'pending' and includes previous error context in prompt
+        if include_error_context is True.
+
+        Args:
+            task_id: Task ID to retry
+            include_error_context: Include previous error in prompt (default: True)
+
+        Returns:
+            Task ID if retry created, None if max retries exceeded
+
+        Example:
+            ```python
+            # Task failed, check if should retry
+            if queue.should_retry_task(task_id):
+                queue.retry_task(task_id, include_error_context=True)
+            ```
+        """
+        if not self.should_retry_task(task_id):
+            return None
+
+        conn = self._get_conn()
+        cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        task = cursor.fetchone()
+
+        if not task:
+            return None
+
+        # Build retry prompt with error context
+        retry_prompt = task['prompt']
+        if include_error_context and task['last_error']:
+            retry_prompt = f"""Previous attempt failed with error:
+{task['last_error']}
+
+Please fix the issue and complete the task:
+{task['prompt']}"""
+
+        # Reset task to pending with updated prompt
+        conn.execute("""
+            UPDATE tasks
+            SET status = 'pending',
+                prompt = ?,
+                worker_id = NULL,
+                claimed_at = NULL,
+                started_at = NULL,
+                error = NULL
+            WHERE id = ?
+        """, (retry_prompt, task_id))
+
+        # Increment retry count
+        self.increment_retry_count(task_id, task['last_error'] or "Unknown error")
+
+        conn.commit()
+        return task_id
+
+    def get_failed_retryable_tasks(self, job_id: Optional[str] = None) -> List[Dict]:
+        """
+        Get all failed tasks that can be retried
+
+        Args:
+            job_id: Optional job ID filter
+
+        Returns:
+            List of failed task dictionaries that have retries remaining
+        """
+        conn = self._get_conn()
+
+        if job_id:
+            cursor = conn.execute("""
+                SELECT * FROM tasks
+                WHERE status = 'failed'
+                  AND job_id = ?
+                  AND retry_count < max_retries
+                ORDER BY priority DESC, created_at ASC
+            """, (job_id,))
+        else:
+            cursor = conn.execute("""
+                SELECT * FROM tasks
+                WHERE status = 'failed'
+                  AND retry_count < max_retries
+                ORDER BY priority DESC, created_at ASC
+            """)
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def retry_all_failed_tasks(self, job_id: Optional[str] = None) -> List[int]:
+        """
+        Retry all failed tasks (that have retries remaining)
+
+        Args:
+            job_id: Optional job ID filter
+
+        Returns:
+            List of task IDs that were retried
+        """
+        failed_tasks = self.get_failed_retryable_tasks(job_id)
+        retried_ids = []
+
+        for task in failed_tasks:
+            task_id = self.retry_task(task['id'], include_error_context=True)
+            if task_id:
+                retried_ids.append(task_id)
+
+        return retried_ids
 
     def get_shared_context(self, job_id: Optional[str] = None) -> Dict[str, str]:
         """

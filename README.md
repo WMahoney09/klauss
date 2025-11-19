@@ -1,6 +1,6 @@
 # Klauss: Claude Code Parallel Orchestration
 
-**Meet Klauss, Claude's friend who orchestrates multi-agent workflows.**
+**Meet Klauss 🐙 Claude's friend who orchestrates multi-agent workflows.**
 
 Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
@@ -98,9 +98,12 @@ Claude Code: 🚀 Starting 6 workers...
 - **🚀 Faster execution** - Complex tasks complete in parallel
 - **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
 - **👀 Visibility** - Real-time dashboard shows parallel progress
-- **🔄 Automatic coordination** - Workers sync through shared queue and conventions
+- **🐙 Automatic coordination** - Workers sync through shared queue and conventions
 - **🎯 Consistent output** - Shared context ensures workers follow same patterns
 - **📊 Task dependencies** - Define execution order with automatic dependency resolution
+- **🔁 Auto-retry** - Tasks retry on failure with error context for learning
+- **💾 Checkpoints** - Save progress and resume after interruptions
+- **↩️ Rollback** - Track changes and undo if needed
 - **🛡️ Safety** - Project boundaries enforced by default, circular dependency detection
 - **✅ Quality verification** - Tasks auto-verified before marked complete
 - **📦 Portable** - Add to any project via git submodule
