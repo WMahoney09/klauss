@@ -1,4 +1,5 @@
-# Meet Klauss 🐙 Claude's friend who orchestrates multi-agent workflows.
+# Meet Klauss 🐙
+**Claude's friend who orchestrates multi-agent workflows.**
 
 Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
