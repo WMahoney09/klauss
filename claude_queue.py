@@ -93,7 +93,239 @@ class TaskQueue:
             ON tasks(job_id, status)
         """)
 
+        # Worker logs for progress visibility
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS worker_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_id TEXT NOT NULL,
+                task_id INTEGER,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                message TEXT NOT NULL,
+                level TEXT DEFAULT 'info',  -- 'info', 'warning', 'error'
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_worker_logs_task
+            ON worker_logs(task_id, timestamp)
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_worker_logs_worker
+            ON worker_logs(worker_id, timestamp DESC)
+        """)
+
         conn.commit()
+
+    # Public API Methods
+
+    def get_connection(self):
+        """
+        Get a database connection for custom queries
+
+        Returns:
+            sqlite3.Connection: Thread-local database connection
+
+        Example:
+            ```python
+            conn = queue.get_connection()
+            cursor = conn.execute("SELECT * FROM tasks WHERE status = ?", ("pending",))
+            for row in cursor:
+                print(row['id'], row['prompt'])
+            ```
+
+        Note:
+            The connection is thread-local and managed internally.
+            It's safe to use across multiple calls in the same thread.
+        """
+        return self._get_conn()
+
+    def log_worker_progress(self, worker_id: str, message: str,
+                           task_id: Optional[int] = None, level: str = 'info'):
+        """
+        Log worker progress message for real-time visibility
+
+        Args:
+            worker_id: Worker identifier
+            message: Progress message
+            task_id: Optional task ID this log relates to
+            level: Log level ('info', 'warning', 'error')
+
+        Example:
+            ```python
+            queue.log_worker_progress("worker_1", "Starting TypeScript compilation", task_id=123)
+            queue.log_worker_progress("worker_1", "Compilation passed", task_id=123)
+            ```
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO worker_logs (worker_id, task_id, message, level)
+            VALUES (?, ?, ?, ?)
+        """, (worker_id, task_id, message, level))
+        conn.commit()
+
+    def get_worker_logs(self, worker_id: Optional[str] = None,
+                       task_id: Optional[int] = None,
+                       limit: int = 100) -> List[Dict]:
+        """
+        Get worker progress logs
+
+        Args:
+            worker_id: Optional worker ID to filter by
+            task_id: Optional task ID to filter by
+            limit: Maximum number of logs to return (default: 100)
+
+        Returns:
+            List of log dictionaries with keys: log_id, worker_id, task_id,
+            timestamp, message, level
+
+        Example:
+            ```python
+            # Get all logs for a specific worker
+            logs = queue.get_worker_logs(worker_id="worker_1")
+
+            # Get all logs for a specific task
+            logs = queue.get_worker_logs(task_id=123)
+
+            # Get recent logs across all workers
+            logs = queue.get_worker_logs(limit=50)
+            ```
+        """
+        conn = self._get_conn()
+
+        query = "SELECT * FROM worker_logs WHERE 1=1"
+        params = []
+
+        if worker_id:
+            query += " AND worker_id = ?"
+            params.append(worker_id)
+
+        if task_id:
+            query += " AND task_id = ?"
+            params.append(task_id)
+
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_active_progress(self) -> List[Dict]:
+        """
+        Get current progress across all active workers
+
+        Returns:
+            List of dictionaries with worker status and current task info:
+            - worker_id: Worker identifier
+            - status: Worker status ('active', 'idle')
+            - current_task_id: Current task ID (if any)
+            - task_prompt: Current task prompt (if any)
+            - task_status: Current task status
+            - recent_log: Most recent log message
+
+        Example:
+            ```python
+            progress = queue.get_active_progress()
+            for worker in progress:
+                if worker['current_task_id']:
+                    print(f"{worker['worker_id']}: {worker['task_prompt'][:50]}...")
+                else:
+                    print(f"{worker['worker_id']}: Idle")
+            ```
+        """
+        conn = self._get_conn()
+
+        cursor = conn.execute("""
+            SELECT
+                w.worker_id,
+                w.status,
+                w.current_task_id,
+                t.prompt as task_prompt,
+                t.status as task_status,
+                (
+                    SELECT message
+                    FROM worker_logs
+                    WHERE worker_id = w.worker_id
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ) as recent_log
+            FROM workers w
+            LEFT JOIN tasks t ON w.current_task_id = t.id
+            ORDER BY w.worker_id
+        """)
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_job_progress(self, job_id: str) -> Dict:
+        """
+        Get detailed progress information for a specific job
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            Dictionary with comprehensive job progress:
+            - job_info: Job metadata
+            - stats: Task statistics (pending, in_progress, completed, failed)
+            - active_tasks: List of currently executing tasks with worker info
+            - recent_logs: Recent log messages for this job's tasks
+
+        Example:
+            ```python
+            progress = queue.get_job_progress("job_abc123")
+            print(f"Progress: {progress['stats']['completed']}/{progress['stats']['total']}")
+            for task in progress['active_tasks']:
+                print(f"  {task['worker_id']}: {task['prompt'][:50]}...")
+            ```
+        """
+        conn = self._get_conn()
+
+        # Get job info
+        job = self.get_job(job_id)
+
+        # Get stats
+        stats = self.get_job_stats(job_id)
+
+        # Get active tasks with worker info
+        cursor = conn.execute("""
+            SELECT
+                t.id,
+                t.prompt,
+                t.status,
+                t.worker_id,
+                t.started_at,
+                w.last_heartbeat
+            FROM tasks t
+            LEFT JOIN workers w ON t.worker_id = w.worker_id
+            WHERE t.job_id = ? AND t.status IN ('claimed', 'in_progress')
+            ORDER BY t.started_at
+        """, (job_id,))
+        active_tasks = [dict(row) for row in cursor.fetchall()]
+
+        # Get recent logs for this job's tasks
+        cursor = conn.execute("""
+            SELECT
+                wl.worker_id,
+                wl.task_id,
+                wl.timestamp,
+                wl.message,
+                wl.level,
+                t.prompt as task_prompt
+            FROM worker_logs wl
+            JOIN tasks t ON wl.task_id = t.id
+            WHERE t.job_id = ?
+            ORDER BY wl.timestamp DESC
+            LIMIT 50
+        """, (job_id,))
+        recent_logs = [dict(row) for row in cursor.fetchall()]
+
+        return {
+            'job_info': job,
+            'stats': stats,
+            'active_tasks': active_tasks,
+            'recent_logs': recent_logs
+        }
 
     def add_task(self, prompt: str, working_dir: Optional[str] = None,
                  context_files: Optional[List[str]] = None,
