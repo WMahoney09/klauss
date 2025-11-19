@@ -313,7 +313,9 @@ class ClaudeOrchestrator:
                    priority: Optional[int] = None,
                    parent_task_id: Optional[int] = None,
                    metadata: Optional[Dict] = None,
-                   allow_external: bool = False) -> int:
+                   allow_external: bool = False,
+                   max_retries: int = 0,
+                   retry_policy: Optional[Dict] = None) -> int:
         """
         Add a sub-task to a job
 
@@ -327,12 +329,23 @@ class ClaudeOrchestrator:
             parent_task_id: Parent task ID for hierarchical tasks
             metadata: Additional task metadata
             allow_external: Allow this task to work outside project boundaries
+            max_retries: Maximum number of retries on failure (default: 0)
+            retry_policy: Retry policy configuration (e.g., {"backoff": "exponential"})
 
         Returns:
             Task ID
 
         Raises:
             ProjectBoundaryError: If working_dir is outside project and not allowed
+
+        Example with retries:
+            # Task will retry up to 2 times on failure
+            task_id = orch.add_subtask(
+                job,
+                "Create complex component with tests",
+                max_retries=2,
+                retry_policy={"backoff": "exponential"}
+            )
         """
         # Use default priority from config if not specified
         if priority is None:
@@ -350,9 +363,13 @@ class ClaudeOrchestrator:
             metadata=metadata,
             priority=priority,
             job_id=job_id,
-            parent_task_id=parent_task_id
+            parent_task_id=parent_task_id,
+            max_retries=max_retries,
+            retry_policy=retry_policy
         )
-        print(f"  └─ Task {task_id}: {prompt[:60]}...")
+
+        retry_info = f" (max {max_retries} retries)" if max_retries > 0 else ""
+        print(f"  └─ Task {task_id}: {prompt[:60]}...{retry_info}")
         return task_id
 
     def get_job_status(self, job_id: str) -> Dict:
@@ -464,24 +481,52 @@ class ClaudeOrchestrator:
         return self.queue.get_job_tasks(job_id, status='failed')
 
     def retry_failed_tasks(self, job_id: str) -> List[int]:
-        """Create new tasks for all failed tasks in a job"""
-        failed = self.get_failed_tasks(job_id)
-        new_task_ids = []
+        """
+        Retry all failed tasks in a job (that have retries remaining)
 
-        for task in failed:
-            new_task_id = self.add_subtask(
-                job_id=job_id,
-                prompt=task['prompt'],
-                working_dir=task['working_dir'],
-                context_files=json.loads(task['context_files']) if task['context_files'] else None,
-                expected_outputs=json.loads(task['expected_outputs']) if task['expected_outputs'] else None,
-                priority=task['priority'],
-                metadata=json.loads(task['metadata']) if task['metadata'] else None
-            )
-            new_task_ids.append(new_task_id)
+        Uses the built-in retry mechanism which includes error context in prompts.
 
-        print(f"Retrying {len(new_task_ids)} failed tasks")
-        return new_task_ids
+        Args:
+            job_id: Job ID
+
+        Returns:
+            List of task IDs that were retried
+        """
+        retried_ids = self.queue.retry_all_failed_tasks(job_id)
+        print(f"Retrying {len(retried_ids)} failed tasks with error context")
+        return retried_ids
+
+    def get_paused_tasks(self, job_id: str) -> List[Dict]:
+        """
+        Get all paused tasks for a job
+
+        Paused tasks are tasks that hit session limits and can be resumed.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            List of paused task dictionaries
+        """
+        paused = self.queue.get_paused_tasks()
+        return [t for t in paused if t['job_id'] == job_id]
+
+    def rollback_task(self, task_id: int) -> Dict:
+        """
+        Rollback all file changes for a task
+
+        Args:
+            task_id: Task ID
+
+        Returns:
+            Dictionary with rollback results
+
+        Example:
+            result = orch.rollback_task(task_id=5)
+            print(f"Files restored: {result['files_restored']}")
+            print(f"Files deleted: {result['files_deleted']}")
+        """
+        return self.queue.rollback_task(task_id)
 
     def create_hierarchical_tasks(self, job_id: str, parent_task_id: int,
                                   subtasks: List[Dict]) -> List[int]:

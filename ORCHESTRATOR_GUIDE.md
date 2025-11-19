@@ -199,6 +199,87 @@ results = quick_delegate([
 # That's it! Results collected automatically
 ```
 
+## Resilience & Error Recovery
+
+### Automatic Retry
+
+Tasks can automatically retry on failure with error context included in subsequent attempts:
+
+```python
+orch = ClaudeOrchestrator("resilient")
+job = orch.create_job("Build complex feature")
+
+# Task will retry up to 2 times on failure
+task_id = orch.add_subtask(
+    job,
+    "Create TypeScript component with tests",
+    max_retries=2,
+    retry_policy={"backoff": "exponential"}
+)
+```
+
+**How it works:**
+1. Task fails (e.g., TypeScript error, missing import)
+2. System checks if retries remaining (`retry_count < max_retries`)
+3. Task automatically reset to 'pending' with error context added to prompt
+4. Worker receives prompt with previous error: "Previous attempt failed with: [error]. Please fix..."
+5. Worker learns from mistake and retries with context
+
+**Benefits:**
+- Handles transient failures automatically
+- Workers learn from previous errors
+- No manual intervention needed for recoverable errors
+
+### Checkpoints & Resume
+
+Tasks can save progress checkpoints and resume after interruptions:
+
+```python
+# In task execution (future worker integration)
+queue.save_checkpoint(
+    task_id=task_id,
+    checkpoint_data={"current_phase": "testing"},
+    files_created=["src/component.tsx"],
+    files_modified=["src/App.tsx"],
+    last_step="Created component, starting tests",
+    completion_percentage=60
+)
+
+# Pause task (e.g., approaching session limit)
+queue.pause_task(task_id, worker_id)
+
+# Workers automatically resume paused tasks
+# Checkpoint data guides continuation
+```
+
+**Use cases:**
+- Session limits approaching
+- Long-running tasks need to be interrupted
+- Graceful handling of worker crashes
+
+### Rollback Support
+
+Track file changes and rollback if needed:
+
+```python
+# Get paused tasks
+paused = orch.get_paused_tasks(job_id)
+
+# Rollback a task's changes
+result = orch.rollback_task(task_id=5)
+print(f"Restored: {result['files_restored']}")
+print(f"Deleted: {result['files_deleted']}")
+```
+
+**CLI rollback:**
+```bash
+# View what would be rolled back
+python3 rollback_task.py 15 --dry-run
+
+# Perform rollback
+python3 rollback_task.py 15
+```
+
 ## Advanced Features
 
 ### Retry Failed Tasks

@@ -99,6 +99,9 @@ Claude Code: 🚀 Starting 6 workers...
 - **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
 - **👀 Visibility** - Real-time dashboard shows parallel progress
 - **🔄 Automatic coordination** - Workers sync through shared queue
+- **🔁 Auto-retry** - Tasks retry on failure with error context for learning
+- **💾 Checkpoints** - Save progress and resume after interruptions
+- **↩️ Rollback** - Track changes and undo if needed
 - **🛡️ Safety** - Project boundaries enforced by default
 - **📦 Portable** - Add to any project via git submodule
 
