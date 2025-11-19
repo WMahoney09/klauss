@@ -80,6 +80,46 @@ orch.add_subtask(
 )
 ```
 
+### Step 3.5: Add Verification (Optional but Recommended)
+
+Tasks automatically verify outputs using auto-detection, but you can also specify custom verification hooks:
+
+```python
+from verification import VerificationHook
+
+# Task with custom verification
+orch.add_subtask(
+    job_id,
+    "Implement payment processing",
+    expected_outputs=["src/payment/processor.ts"],
+    verification_hooks=[
+        VerificationHook(
+            command="npx tsc --noEmit",
+            description="TypeScript compilation"
+        ),
+        VerificationHook(
+            command="npm run test:payment",
+            description="Payment tests"
+        )
+    ]
+)
+
+# Disable auto-verification for documentation tasks
+orch.add_subtask(
+    job_id,
+    "Update API documentation",
+    auto_verify=False  # Skip verification
+)
+```
+
+**Auto-Verification (Default):**
+- Workers automatically detect project type (TypeScript, Python, Go, etc.)
+- Run appropriate checks (compilation, linting, tests)
+- Only mark tasks complete if ALL checks pass
+- Provides detailed error messages on failure
+
+This prevents false successes when code contains errors!
+
 ### Step 4: Wait for Completion
 
 ```python

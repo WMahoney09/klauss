@@ -14,6 +14,8 @@ from pathlib import Path
 
 from claude_queue import TaskQueue
 from config import Config, ProjectBoundaryError
+from verification import VerificationHook
+from utils import is_interactive, get_env_int, get_env_bool
 
 class ClaudeOrchestrator:
     """
@@ -132,12 +134,22 @@ class ClaudeOrchestrator:
 
         Args:
             count: Number of workers to start
-            ask_permission: If True, prompt user for confirmation
+            ask_permission: If True, prompt user for confirmation (only in interactive mode)
 
         Returns:
             True if workers started, False if user declined or error
+
+        Environment Variables:
+            KLAUSS_AUTO_START_WORKERS: If 'true', auto-start workers without prompting (default: false)
         """
-        if ask_permission:
+        # Check if we should skip permission prompt
+        auto_start = get_env_bool('KLAUSS_AUTO_START_WORKERS', default=False)
+        interactive = is_interactive()
+
+        # Skip prompt if: auto_start enabled OR non-interactive mode
+        should_prompt = ask_permission and interactive and not auto_start
+
+        if should_prompt:
             response = input(
                 f"\n💡 I'd like to start {count} workers for parallel execution.\n"
                 f"   This will spawn {count} Claude Code instances to work simultaneously.\n"
@@ -147,6 +159,9 @@ class ClaudeOrchestrator:
             if response not in ['y', 'yes']:
                 print("⏭️  Skipping parallel execution (workers not started)")
                 return False
+        elif not interactive:
+            # In non-interactive mode, inform user via logs
+            print(f"🤖 Non-interactive mode detected - auto-starting {count} workers")
 
         print(f"🚀 Starting {count} workers...")
 
@@ -195,6 +210,10 @@ class ClaudeOrchestrator:
 
         Returns:
             True if workers are available, False otherwise
+
+        Environment Variables:
+            KLAUSS_WORKERS: Override optimal worker count (default: auto-calculated)
+            KLAUSS_AUTO_START_WORKERS: If 'true', auto-start workers without prompting
         """
         # Check current workers
         current_workers = self.check_workers_running()
@@ -203,12 +222,18 @@ class ClaudeOrchestrator:
             print(f"✓ {current_workers} workers already running")
             return True
 
-        # Calculate optimal worker count
-        optimal = self.calculate_optimal_workers(job_id)
+        # Check for environment variable override
+        env_workers = get_env_int('KLAUSS_WORKERS')
 
-        print(f"\n📊 Job Analysis:")
-        print(f"   - {self.queue.get_job_stats(job_id)['pending']} tasks can run in parallel")
-        print(f"   - Suggesting {optimal} workers for optimal execution")
+        if env_workers is not None:
+            optimal = env_workers
+            print(f"\n📊 Using KLAUSS_WORKERS={optimal} from environment")
+        else:
+            # Calculate optimal worker count
+            optimal = self.calculate_optimal_workers(job_id)
+            print(f"\n📊 Job Analysis:")
+            print(f"   - {self.queue.get_job_stats(job_id)['pending']} tasks can run in parallel")
+            print(f"   - Suggesting {optimal} workers for optimal execution")
 
         # Prompt to start workers
         return self.start_workers(optimal, ask_permission=True)
@@ -353,6 +378,8 @@ class ClaudeOrchestrator:
                    metadata: Optional[Dict] = None,
                    allow_external: bool = False,
                    depends_on: Optional[List[int]] = None) -> int:
+                   verification_hooks: Optional[List[VerificationHook]] = None,
+                   auto_verify: bool = True) -> int:
         """
         Add a sub-task to a job
 
@@ -367,6 +394,8 @@ class ClaudeOrchestrator:
             metadata: Additional task metadata
             allow_external: Allow this task to work outside project boundaries
             depends_on: List of task IDs this task depends on (will only be claimed when dependencies complete)
+            verification_hooks: List of verification hooks to run after task completion
+            auto_verify: Auto-detect project type and add verification hooks (default: True)
 
         Returns:
             Task ID
@@ -386,13 +415,23 @@ class ClaudeOrchestrator:
         # Validate working directory
         self.config.validate_working_dir(working_dir, allow_external)
 
+        # Prepare metadata with verification hooks
+        task_metadata = metadata.copy() if metadata else {}
+
+        # Add verification hooks to metadata
+        if verification_hooks:
+            task_metadata['verification_hooks'] = [h.to_dict() for h in verification_hooks]
+
+        # Set auto_verify flag
+        task_metadata['auto_verify'] = auto_verify
+
         # Add task to queue
         task_id = self.queue.add_task(
             prompt=prompt,
             working_dir=working_dir,
             context_files=context_files,
             expected_outputs=expected_outputs,
-            metadata=metadata,
+            metadata=task_metadata,
             priority=priority,
             job_id=job_id,
             parent_task_id=parent_task_id

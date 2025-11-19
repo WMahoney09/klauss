@@ -102,7 +102,95 @@ Claude Code: 🚀 Starting 6 workers...
 - **🎯 Consistent output** - Shared context ensures workers follow same patterns
 - **📊 Task dependencies** - Define execution order with automatic dependency resolution
 - **🛡️ Safety** - Project boundaries enforced by default, circular dependency detection
+- **✅ Quality verification** - Tasks auto-verified before marked complete
 - **📦 Portable** - Add to any project via git submodule
+
+## ✅ Task Verification & Quality Gates
+
+Klauss automatically verifies task outputs before marking them complete, preventing false successes when code contains errors.
+
+### Auto-Detection
+
+Workers automatically detect your project type and run appropriate verification checks:
+
+**TypeScript/JavaScript Projects:**
+- TypeScript compilation (`npx tsc --noEmit`)
+- ESLint checks (if configured)
+- Test suite execution (if `npm test` script exists)
+
+**Python Projects:**
+- Type checking with mypy (if configured)
+- Code formatting with black (if configured)
+- pytest test suite (if pytest.ini exists)
+
+**Go Projects:**
+- Build verification (`go build ./...`)
+- Test execution (`go test ./...`)
+
+**Rust Projects:**
+- Cargo check (`cargo check`)
+- Test execution (`cargo test`)
+
+### How It Works
+
+```
+Task Execution Flow:
+1. Worker executes task with Claude CLI
+2. Checks expected output files exist
+3. Auto-detects project type
+4. Runs verification hooks
+5. Only marks complete if ALL checks pass
+```
+
+If verification fails, the task is marked as failed with detailed error messages, allowing for retry with context.
+
+### Custom Verification Hooks
+
+You can also specify custom verification commands for specific tasks:
+
+```python
+from orchestrator import ClaudeOrchestrator
+from verification import VerificationHook
+
+orch = ClaudeOrchestrator("my_orch")
+job = orch.create_job("Build authentication system")
+
+# Add task with custom verification
+orch.add_subtask(
+    job,
+    "Implement JWT authentication",
+    expected_outputs=["src/auth/jwt.ts"],
+    verification_hooks=[
+        VerificationHook(
+            command="npx tsc --noEmit",
+            description="TypeScript compilation"
+        ),
+        VerificationHook(
+            command="npm run test:auth",
+            description="Run auth tests"
+        )
+    ]
+)
+```
+
+### Disabling Auto-Verification
+
+For tasks that don't need verification:
+
+```python
+orch.add_subtask(
+    job,
+    "Update documentation",
+    auto_verify=False  # Skip verification
+)
+```
+
+### Benefits
+
+- **No false positives** - Tasks only marked complete when actually working
+- **Immediate feedback** - Catch errors during execution, not manual testing
+- **Retry with context** - Failed verifications include error details for fixes
+- **Zero configuration** - Auto-detects and enables appropriate checks
 
 ## 📖 Example Workflow
 
@@ -273,6 +361,88 @@ Klauss works out-of-the-box with zero configuration. For advanced use:
 ```
 
 See [Configuration Guide](#configuration) for details.
+
+## 🤖 Non-Interactive Mode & Environment Variables
+
+Klauss supports running in non-interactive contexts like CI/CD, Docker containers, and background jobs without prompting for user input.
+
+### Environment Variables
+
+Configure Klauss behavior via environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `KLAUSS_WORKERS` | Number of workers to spawn | Auto-calculated based on tasks |
+| `KLAUSS_DB_PATH` | Path to task database | Auto-detected from project |
+| `KLAUSS_AUTO_START_WORKERS` | Auto-start workers without prompting (`true`/`false`) | `false` |
+
+### Non-Interactive Detection
+
+Klauss automatically detects non-interactive contexts (no TTY) and:
+- Skips user prompts
+- Uses environment variable defaults
+- Auto-starts workers when `KLAUSS_AUTO_START_WORKERS=true`
+
+### Usage Examples
+
+#### CI/CD Pipeline
+```bash
+# .github/workflows/claude-tasks.yml
+- name: Run KLAUSS tasks
+  env:
+    KLAUSS_WORKERS: 10
+    KLAUSS_AUTO_START_WORKERS: true
+  run: |
+    python3 orchestrator_script.py
+```
+
+#### Docker Container
+```dockerfile
+# Dockerfile
+ENV KLAUSS_WORKERS=8
+ENV KLAUSS_AUTO_START_WORKERS=true
+ENV KLAUSS_DB_PATH=/app/tasks.db
+
+CMD ["python3", "orchestrator_script.py"]
+```
+
+#### Background Job
+```bash
+# Run in background without prompts
+KLAUSS_AUTO_START_WORKERS=true KLAUSS_WORKERS=5 python3 build_project.py &
+```
+
+#### Coordinator CLI
+
+The coordinator supports both positional arguments and flags:
+
+```bash
+# Using environment variables
+export KLAUSS_WORKERS=10
+export KLAUSS_DB_PATH=tasks.db
+python3 klauss/claude_coordinator.py
+
+# Using CLI flags
+python3 klauss/claude_coordinator.py --workers 10 --db tasks.db
+
+# Using positional arguments (legacy)
+python3 klauss/claude_coordinator.py 10 tasks.db
+
+# Get help
+python3 klauss/claude_coordinator.py --help
+```
+
+### Interactive Mode (Default)
+
+When running in a terminal (TTY), Klauss will:
+- Prompt for confirmation before starting workers
+- Display interactive progress
+- Allow manual control
+
+To force auto-start even in interactive mode:
+```bash
+KLAUSS_AUTO_START_WORKERS=true python3 orchestrator_script.py
+```
 
 ## 📚 Documentation
 
