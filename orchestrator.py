@@ -14,6 +14,7 @@ from pathlib import Path
 
 from claude_queue import TaskQueue
 from config import Config, ProjectBoundaryError
+from verification import VerificationHook
 
 class ClaudeOrchestrator:
     """
@@ -313,7 +314,9 @@ class ClaudeOrchestrator:
                    priority: Optional[int] = None,
                    parent_task_id: Optional[int] = None,
                    metadata: Optional[Dict] = None,
-                   allow_external: bool = False) -> int:
+                   allow_external: bool = False,
+                   verification_hooks: Optional[List[VerificationHook]] = None,
+                   auto_verify: bool = True) -> int:
         """
         Add a sub-task to a job
 
@@ -327,6 +330,8 @@ class ClaudeOrchestrator:
             parent_task_id: Parent task ID for hierarchical tasks
             metadata: Additional task metadata
             allow_external: Allow this task to work outside project boundaries
+            verification_hooks: List of verification hooks to run after task completion
+            auto_verify: Auto-detect project type and add verification hooks (default: True)
 
         Returns:
             Task ID
@@ -341,13 +346,23 @@ class ClaudeOrchestrator:
         # Validate working directory
         self.config.validate_working_dir(working_dir, allow_external)
 
+        # Prepare metadata with verification hooks
+        task_metadata = metadata.copy() if metadata else {}
+
+        # Add verification hooks to metadata
+        if verification_hooks:
+            task_metadata['verification_hooks'] = [h.to_dict() for h in verification_hooks]
+
+        # Set auto_verify flag
+        task_metadata['auto_verify'] = auto_verify
+
         # Add task to queue
         task_id = self.queue.add_task(
             prompt=prompt,
             working_dir=working_dir,
             context_files=context_files,
             expected_outputs=expected_outputs,
-            metadata=metadata,
+            metadata=task_metadata,
             priority=priority,
             job_id=job_id,
             parent_task_id=parent_task_id

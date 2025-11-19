@@ -17,6 +17,12 @@ import signal
 
 from claude_queue import TaskQueue
 from config import Config
+from verification import (
+    TaskVerifier,
+    VerificationHook,
+    ProjectTypeDetector,
+    format_verification_error
+)
 
 class ClaudeWorker:
     def __init__(self, worker_id: str, db_path: Optional[str] = None, config: Optional[Config] = None):
@@ -72,6 +78,12 @@ class ClaudeWorker:
         context_files = json.loads(task['context_files']) if task['context_files'] else []
         expected_outputs = json.loads(task['expected_outputs']) if task['expected_outputs'] else []
 
+        # Parse metadata for verification hooks
+        metadata = json.loads(task['metadata']) if task['metadata'] else {}
+        verification_hooks_data = metadata.get('verification_hooks', [])
+        verification_hooks = [VerificationHook.from_dict(h) for h in verification_hooks_data]
+        auto_verify = metadata.get('auto_verify', True)  # Auto-detect and verify by default
+
         print(f"[{self.worker_id}] Executing task {task_id}: {prompt[:50]}...")
 
         # Build comprehensive prompt with context
@@ -121,21 +133,48 @@ class ClaudeWorker:
                 output['error'] = error_msg
                 return output
 
-            # Check for expected output files (Issue #11 fix)
-            if expected_outputs:
-                output['expected_files_present'] = {}
-                missing_files = []
-                for expected_file in expected_outputs:
-                    file_path = Path(working_dir) / expected_file
-                    is_present = file_path.exists()
-                    output['expected_files_present'][expected_file] = is_present
-                    if not is_present:
-                        missing_files.append(expected_file)
+            # Initialize verifier
+            verifier = TaskVerifier(working_dir)
 
-                # Fail task if expected files are missing
-                if missing_files:
+            # Check for expected output files
+            missing_files = []
+            if expected_outputs:
+                print(f"[{self.worker_id}] [VERIFY] Checking expected outputs...")
+                all_exist, file_status = verifier.check_expected_outputs(expected_outputs)
+                output['expected_files_present'] = file_status
+
+                if not all_exist:
+                    missing_files = [f for f, exists in file_status.items() if not exists]
                     output['error'] = f"Expected output files not created: {', '.join(missing_files)}"
                     return output
+
+            # Auto-detect verification hooks if enabled and none provided
+            if auto_verify and not verification_hooks:
+                print(f"[{self.worker_id}] [VERIFY] Auto-detecting project type...")
+                project_types = ProjectTypeDetector.detect_project_types(working_dir)
+                if project_types:
+                    print(f"[{self.worker_id}] [VERIFY] Detected project types: {', '.join(project_types)}")
+                    verification_hooks = ProjectTypeDetector.get_default_hooks(project_types, working_dir)
+                    if verification_hooks:
+                        print(f"[{self.worker_id}] [VERIFY] Using {len(verification_hooks)} auto-detected hooks")
+
+            # Run verification hooks
+            if verification_hooks:
+                print(f"[{self.worker_id}] [VERIFY] Running {len(verification_hooks)} verification hooks...")
+                all_passed, verification_results = verifier.verify_task(verification_hooks)
+
+                # Store verification results in output
+                output['verification_results'] = [r.to_dict() for r in verification_results]
+
+                if not all_passed:
+                    error_msg = format_verification_error(verification_results, missing_files)
+                    output['error'] = f"Verification failed:\n{error_msg}"
+                    print(f"[{self.worker_id}] [VERIFY] ❌ Verification failed")
+                    return output
+
+                print(f"[{self.worker_id}] [VERIFY] ✅ All verifications passed")
+            else:
+                print(f"[{self.worker_id}] [VERIFY] No verification hooks configured")
 
             return output
 

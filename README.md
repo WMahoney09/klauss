@@ -99,8 +99,96 @@ Claude Code: 🚀 Starting 6 workers...
 - **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
 - **👀 Visibility** - Real-time dashboard shows parallel progress
 - **🔄 Automatic coordination** - Workers sync through shared queue
+- **✅ Quality verification** - Tasks auto-verified before marked complete
 - **🛡️ Safety** - Project boundaries enforced by default
 - **📦 Portable** - Add to any project via git submodule
+
+## ✅ Task Verification & Quality Gates
+
+Klauss automatically verifies task outputs before marking them complete, preventing false successes when code contains errors.
+
+### Auto-Detection
+
+Workers automatically detect your project type and run appropriate verification checks:
+
+**TypeScript/JavaScript Projects:**
+- TypeScript compilation (`npx tsc --noEmit`)
+- ESLint checks (if configured)
+- Test suite execution (if `npm test` script exists)
+
+**Python Projects:**
+- Type checking with mypy (if configured)
+- Code formatting with black (if configured)
+- pytest test suite (if pytest.ini exists)
+
+**Go Projects:**
+- Build verification (`go build ./...`)
+- Test execution (`go test ./...`)
+
+**Rust Projects:**
+- Cargo check (`cargo check`)
+- Test execution (`cargo test`)
+
+### How It Works
+
+```
+Task Execution Flow:
+1. Worker executes task with Claude CLI
+2. Checks expected output files exist
+3. Auto-detects project type
+4. Runs verification hooks
+5. Only marks complete if ALL checks pass
+```
+
+If verification fails, the task is marked as failed with detailed error messages, allowing for retry with context.
+
+### Custom Verification Hooks
+
+You can also specify custom verification commands for specific tasks:
+
+```python
+from orchestrator import ClaudeOrchestrator
+from verification import VerificationHook
+
+orch = ClaudeOrchestrator("my_orch")
+job = orch.create_job("Build authentication system")
+
+# Add task with custom verification
+orch.add_subtask(
+    job,
+    "Implement JWT authentication",
+    expected_outputs=["src/auth/jwt.ts"],
+    verification_hooks=[
+        VerificationHook(
+            command="npx tsc --noEmit",
+            description="TypeScript compilation"
+        ),
+        VerificationHook(
+            command="npm run test:auth",
+            description="Run auth tests"
+        )
+    ]
+)
+```
+
+### Disabling Auto-Verification
+
+For tasks that don't need verification:
+
+```python
+orch.add_subtask(
+    job,
+    "Update documentation",
+    auto_verify=False  # Skip verification
+)
+```
+
+### Benefits
+
+- **No false positives** - Tasks only marked complete when actually working
+- **Immediate feedback** - Catch errors during execution, not manual testing
+- **Retry with context** - Failed verifications include error details for fixes
+- **Zero configuration** - Auto-detects and enables appropriate checks
 
 ## 📖 Example Workflow
 
