@@ -93,6 +93,41 @@ class TaskQueue:
             ON tasks(job_id, status)
         """)
 
+        # Shared context for worker coordination
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shared_context (
+                context_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT,  -- NULL for global context
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id, key)
+            )
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_shared_context_job
+            ON shared_context(job_id)
+        """)
+
+        # Task dependencies
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_dependencies (
+                task_id INTEGER NOT NULL,
+                depends_on_task_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (task_id, depends_on_task_id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id),
+                FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id)
+            )
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_task_dependencies
+            ON task_dependencies(task_id)
+        """)
+
         conn.commit()
 
     def add_task(self, prompt: str, working_dir: Optional[str] = None,
@@ -122,34 +157,53 @@ class TaskQueue:
         return cursor.lastrowid
 
     def claim_task(self, worker_id: str) -> Optional[Dict]:
-        """Atomically claim the next available task"""
+        """
+        Atomically claim the next available task
+
+        Only claims tasks whose dependencies are met (all dependent tasks completed).
+
+        Args:
+            worker_id: Worker identifier claiming the task
+
+        Returns:
+            Task dictionary if claimed, None if no tasks available
+        """
         conn = self._get_conn()
 
         # Use transaction to ensure atomicity
         conn.execute("BEGIN EXCLUSIVE")
         try:
-            # Get highest priority pending task
+            # Get pending tasks ordered by priority
+            # We'll check dependencies for each until we find one we can claim
             cursor = conn.execute("""
                 SELECT * FROM tasks
                 WHERE status = 'pending'
                 ORDER BY priority DESC, created_at ASC
-                LIMIT 1
+                LIMIT 10
             """)
-            task = cursor.fetchone()
+            tasks = cursor.fetchall()
 
-            if not task:
+            if not tasks:
                 conn.rollback()
                 return None
 
-            # Claim it
-            conn.execute("""
-                UPDATE tasks
-                SET status = 'claimed', worker_id = ?, claimed_at = ?
-                WHERE id = ?
-            """, (worker_id, datetime.now(), task['id']))
+            # Find first task with met dependencies
+            for task in tasks:
+                if self.are_dependencies_met(task['id']):
+                    # Claim it
+                    conn.execute("""
+                        UPDATE tasks
+                        SET status = 'claimed', worker_id = ?, claimed_at = ?
+                        WHERE id = ?
+                    """, (worker_id, datetime.now(), task['id']))
 
-            conn.commit()
-            return dict(task)
+                    conn.commit()
+                    return dict(task)
+
+            # No tasks with met dependencies
+            conn.rollback()
+            return None
+
         except Exception as e:
             conn.rollback()
             raise e
@@ -384,3 +438,233 @@ class TaskQueue:
             List of worker dictionaries with status and heartbeat info
         """
         return self.get_all_workers()
+
+    # Shared Context API
+
+    def set_shared_context(self, key: str, value: str, job_id: Optional[str] = None):
+        """
+        Set a shared context value for worker coordination
+
+        Args:
+            key: Context key (e.g., "css_import_pattern", "type_import_style")
+            value: Context value (convention, pattern, or decision)
+            job_id: Optional job ID to scope context (None for global)
+
+        Example:
+            ```python
+            # Set global convention
+            queue.set_shared_context(
+                "css_imports",
+                "Always use: import * as styles from './Component.css'"
+            )
+
+            # Set job-specific context
+            queue.set_shared_context(
+                "api_pattern",
+                "All API calls use fetch with error handling wrapper",
+                job_id="job_abc123"
+            )
+            ```
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO shared_context (job_id, key, value, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(job_id, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+        """, (job_id, key, value))
+        conn.commit()
+
+    def get_shared_context(self, job_id: Optional[str] = None) -> Dict[str, str]:
+        """
+        Get all shared context for workers
+
+        Args:
+            job_id: Optional job ID to get job-specific context
+
+        Returns:
+            Dictionary of key-value context pairs
+
+        Example:
+            ```python
+            # Get global context
+            context = queue.get_shared_context()
+            # {'css_imports': 'import * as styles...', 'type_imports': '...'}
+
+            # Get job-specific context (includes global context)
+            context = queue.get_shared_context(job_id="job_abc123")
+            ```
+
+        Note:
+            Job-specific context includes both job-scoped and global contexts,
+            with job-scoped values taking precedence.
+        """
+        conn = self._get_conn()
+
+        # Get global context
+        cursor = conn.execute("""
+            SELECT key, value FROM shared_context
+            WHERE job_id IS NULL
+            ORDER BY updated_at
+        """)
+        context = {row['key']: row['value'] for row in cursor.fetchall()}
+
+        # Overlay job-specific context if job_id provided
+        if job_id:
+            cursor = conn.execute("""
+                SELECT key, value FROM shared_context
+                WHERE job_id = ?
+                ORDER BY updated_at
+            """, (job_id,))
+            context.update({row['key']: row['value'] for row in cursor.fetchall()})
+
+        return context
+
+    def delete_shared_context(self, key: str, job_id: Optional[str] = None):
+        """
+        Delete a shared context entry
+
+        Args:
+            key: Context key to delete
+            job_id: Optional job ID to scope deletion (None for global)
+        """
+        conn = self._get_conn()
+        conn.execute("""
+            DELETE FROM shared_context
+            WHERE key = ? AND job_id IS ?
+        """, (key, job_id))
+        conn.commit()
+
+    # Task Dependencies API
+
+    def add_task_dependency(self, task_id: int, depends_on_task_id: int):
+        """
+        Add a dependency between tasks
+
+        Args:
+            task_id: Task that depends on another
+            depends_on_task_id: Task that must complete first
+
+        Raises:
+            ValueError: If circular dependency detected
+
+        Example:
+            ```python
+            # Task 2 depends on Task 1
+            queue.add_task_dependency(task_id=2, depends_on_task_id=1)
+            # Worker will not claim task 2 until task 1 is completed
+            ```
+        """
+        # Check for circular dependencies
+        if self._has_circular_dependency(task_id, depends_on_task_id):
+            raise ValueError(
+                f"Circular dependency detected: task {task_id} -> {depends_on_task_id}"
+            )
+
+        conn = self._get_conn()
+        try:
+            conn.execute("""
+                INSERT INTO task_dependencies (task_id, depends_on_task_id)
+                VALUES (?, ?)
+            """, (task_id, depends_on_task_id))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            # Dependency already exists, ignore
+            pass
+
+    def get_task_dependencies(self, task_id: int) -> List[int]:
+        """
+        Get all tasks that this task depends on
+
+        Args:
+            task_id: Task to get dependencies for
+
+        Returns:
+            List of task IDs that must complete before this task
+
+        Example:
+            ```python
+            deps = queue.get_task_dependencies(task_id=5)
+            # [1, 2, 3] - task 5 depends on tasks 1, 2, and 3
+            ```
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT depends_on_task_id FROM task_dependencies
+            WHERE task_id = ?
+        """, (task_id,))
+        return [row['depends_on_task_id'] for row in cursor.fetchall()]
+
+    def are_dependencies_met(self, task_id: int) -> bool:
+        """
+        Check if all dependencies for a task are completed
+
+        Args:
+            task_id: Task to check
+
+        Returns:
+            True if all dependencies are completed, False otherwise
+
+        Example:
+            ```python
+            if queue.are_dependencies_met(task_id=5):
+                # Safe to claim and execute task 5
+                task = queue.claim_task(worker_id)
+            ```
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("""
+            SELECT COUNT(*) as unmet_count
+            FROM task_dependencies td
+            JOIN tasks t ON td.depends_on_task_id = t.id
+            WHERE td.task_id = ?
+              AND t.status NOT IN ('completed', 'cancelled')
+        """, (task_id,))
+        result = cursor.fetchone()
+        return result['unmet_count'] == 0
+
+    def _has_circular_dependency(self, task_id: int, depends_on_task_id: int) -> bool:
+        """
+        Check if adding a dependency would create a cycle
+
+        Args:
+            task_id: Task to add dependency to
+            depends_on_task_id: Task it would depend on
+
+        Returns:
+            True if this would create a circular dependency
+
+        Implementation:
+            Uses depth-first search to detect cycles
+        """
+        # If depends_on_task_id already depends on task_id (directly or indirectly),
+        # adding task_id -> depends_on_task_id would create a cycle
+
+        visited = set()
+        stack = [depends_on_task_id]
+
+        conn = self._get_conn()
+
+        while stack:
+            current = stack.pop()
+
+            if current == task_id:
+                # Found a path back to task_id - circular dependency
+                return True
+
+            if current in visited:
+                continue
+
+            visited.add(current)
+
+            # Get all tasks that current depends on
+            cursor = conn.execute("""
+                SELECT depends_on_task_id FROM task_dependencies
+                WHERE task_id = ?
+            """, (current,))
+
+            for row in cursor.fetchall():
+                stack.append(row['depends_on_task_id'])
+
+        return False

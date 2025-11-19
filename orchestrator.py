@@ -306,6 +306,44 @@ class ClaudeOrchestrator:
         print(f"Created job {job_id}: {description}")
         return job_id
 
+    def set_shared_context(self, key: str, value: str, job_id: Optional[str] = None):
+        """
+        Set shared context for worker coordination
+
+        Workers will automatically receive these conventions in their prompts to ensure
+        consistent output across parallel tasks.
+
+        Args:
+            key: Context key (e.g., "css_imports", "type_import_style")
+            value: Context value (e.g., "Use @import statements", "Use 'import type' syntax")
+            job_id: Optional job ID (uses current job if None, global if not in a job)
+
+        Example:
+            orch.set_shared_context("naming_convention", "Use camelCase for functions")
+            orch.set_shared_context("import_style", "Use ES6 imports", job_id=job)
+        """
+        if job_id is None:
+            job_id = self.current_job_id
+
+        self.queue.set_shared_context(key, value, job_id)
+        scope = f"job {job_id}" if job_id else "global"
+        print(f"  📝 Set shared context [{scope}]: {key} = {value[:50]}...")
+
+    def get_shared_context(self, job_id: Optional[str] = None) -> Dict[str, str]:
+        """
+        Get shared context for a job (includes job-specific + global context)
+
+        Args:
+            job_id: Optional job ID (uses current job if None)
+
+        Returns:
+            Dict of context key-value pairs
+        """
+        if job_id is None:
+            job_id = self.current_job_id
+
+        return self.queue.get_shared_context(job_id)
+
     def add_subtask(self, job_id: str, prompt: str,
                    working_dir: Optional[str] = None,
                    context_files: Optional[List[str]] = None,
@@ -313,7 +351,8 @@ class ClaudeOrchestrator:
                    priority: Optional[int] = None,
                    parent_task_id: Optional[int] = None,
                    metadata: Optional[Dict] = None,
-                   allow_external: bool = False) -> int:
+                   allow_external: bool = False,
+                   depends_on: Optional[List[int]] = None) -> int:
         """
         Add a sub-task to a job
 
@@ -327,12 +366,18 @@ class ClaudeOrchestrator:
             parent_task_id: Parent task ID for hierarchical tasks
             metadata: Additional task metadata
             allow_external: Allow this task to work outside project boundaries
+            depends_on: List of task IDs this task depends on (will only be claimed when dependencies complete)
 
         Returns:
             Task ID
 
         Raises:
             ProjectBoundaryError: If working_dir is outside project and not allowed
+
+        Example with dependencies:
+            # Task 2 depends on Task 1 completing first
+            task1 = orch.add_subtask(job, "Build authentication module")
+            task2 = orch.add_subtask(job, "Write tests for authentication", depends_on=[task1])
         """
         # Use default priority from config if not specified
         if priority is None:
@@ -352,6 +397,17 @@ class ClaudeOrchestrator:
             job_id=job_id,
             parent_task_id=parent_task_id
         )
+
+        # Add dependencies if specified
+        if depends_on:
+            for dep_task_id in depends_on:
+                try:
+                    self.queue.add_task_dependency(task_id, dep_task_id)
+                    print(f"  └─ Task {task_id} depends on Task {dep_task_id}")
+                except ValueError as e:
+                    # Circular dependency or other validation error
+                    print(f"  ⚠️  Warning: Could not add dependency {dep_task_id} -> {task_id}: {e}")
+
         print(f"  └─ Task {task_id}: {prompt[:60]}...")
         return task_id
 
