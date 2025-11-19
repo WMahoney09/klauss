@@ -1,6 +1,8 @@
 # Meet Klauss 🐙
 **Claude's friend who orchestrates multi-agent workflows.**
 
+[![CI](https://github.com/WMahoney09/klauss/actions/workflows/ci.yml/badge.svg)](https://github.com/WMahoney09/klauss/actions/workflows/ci.yml)
+
 Klauss lets Claude Code break down complex tasks and execute them across multiple Claude instances simultaneously. Think of it as Claude's helpful assistant that coordinates parallel work.
 
 > 🤖 **This was built with Claude for Claude to use**
