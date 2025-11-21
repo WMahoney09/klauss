@@ -247,6 +247,154 @@ Claude: I'll coordinate workers to ensure consistency...
         Result: Well-structured, consistent codebase!
 ```
 
+## 🎓 Getting Started: Complete Workflow Guide
+
+This guide walks you through the optimal sequence for starting a new project with Klauss, from empty directory to fully-built application with parallel execution.
+
+### Phase 1: Setup Klauss (One-time, ~2 minutes)
+
+**Prompt 1: "Set up Klauss"**
+```
+Add Klauss as a submodule to this project and install its dependencies.
+Then read the FOR_CLAUDE.md file to understand how to use it.
+```
+
+**What happens:** Claude will:
+- Run `git init` (if needed)
+- Add Klauss submodule
+- Install dependencies
+- Read the FOR_CLAUDE.md to understand the system
+
+### Phase 2: Understand & Plan (~3-5 minutes)
+
+**Prompt 2: "Analyze requirements and plan approach"**
+```
+Read [requirements-file.md]. Analyze the requirements and:
+1. Identify what can be built in parallel vs. what needs to happen sequentially
+2. Suggest a project structure
+3. Identify any shared conventions workers should follow (coding style, patterns, etc.)
+4. Break this down into a concrete execution plan using Klauss
+
+Don't start building yet - just plan.
+```
+
+**What happens:** Claude will:
+- Read your requirements
+- Think through the architecture
+- Identify parallelization opportunities
+- Propose dependencies between tasks
+- Suggest shared context for consistency
+
+**Why separate planning:** This lets you review and adjust before spinning up workers.
+
+### Phase 3: Execute (~10-30 minutes depending on complexity)
+
+**Prompt 3: "Build it using Klauss"**
+```
+Execute the plan using Klauss. Use the orchestrator to delegate tasks
+to parallel workers. Make sure to set shared context for consistency
+and define dependencies where tasks need to run in order.
+```
+
+**What happens:** Claude will:
+- Import the orchestrator
+- Create a job with your requirements as the description
+- Break down into subtasks with appropriate priorities
+- Set shared context (coding conventions, patterns, etc.)
+- Define dependencies for ordered execution
+- Call `wait_and_collect()` which will prompt you to start workers
+- Monitor progress and synthesize results
+
+### Alternative: One-Shot Approach (After Klauss is set up)
+
+Once Klauss is installed, you can also do this in one prompt:
+
+**Single Prompt:**
+```
+Read [requirements.md] and build the application using Klauss for
+parallel execution. Break it down intelligently, set shared conventions
+for consistency, and use dependencies where tasks need specific ordering.
+```
+
+Claude should automatically:
+- Analyze requirements
+- Use the orchestrator
+- Handle all the complexity
+
+### Complete Example Session
+
+Here's what a full session looks like from start to finish:
+
+```
+You: "Set up Klauss and read FOR_CLAUDE.md"
+
+Claude: [Adds submodule, installs deps, reads docs]
+        "Ready to use Klauss! ✓"
+
+You: "Read requirements.md and build the task management API
+      described there using Klauss for parallel execution."
+
+Claude: "I'll break this down into parallel tasks..."
+
+        [Creates orchestrator]
+        [Analyzes requirements]
+        [Creates 12 subtasks with priorities and dependencies]
+        [Sets shared context for API patterns]
+
+        "💡 I'd like to start 8 workers for optimal execution.
+           Start workers? (y/n):"
+
+You: "y"
+
+Claude: [Workers execute in parallel]
+        [Shows progress]
+        [Synthesizes results]
+
+        "Done! Built complete task management API with:
+         - 6 CRUD endpoints
+         - JWT authentication
+         - Input validation
+         - Comprehensive tests
+         - API documentation
+
+         All tests passing ✓"
+```
+
+### Key Tips for Best Results
+
+**1. Requirements File Should Include:**
+- Functional requirements (what it should do)
+- Technical preferences (language, frameworks, patterns)
+- Quality requirements (tests, docs, error handling)
+
+**2. Let Claude Handle Complexity:**
+Don't micromanage the task breakdown. Claude is good at:
+- Identifying parallelization opportunities
+- Setting appropriate priorities
+- Defining dependencies
+
+**3. Trust the Process:**
+When Claude asks "Start N workers? (y/n)", say yes. The system auto-calculates optimal worker count.
+
+**4. For Large Projects:**
+Consider breaking into phases:
+```
+Phase 1: "Build the core authentication module using Klauss"
+Phase 2: "Build the API endpoints using Klauss"
+Phase 3: "Add comprehensive tests using Klauss"
+```
+
+This prevents one massive job with 50+ tasks.
+
+### What NOT to Do
+
+❌ Don't manually specify every subtask - let Claude decompose
+❌ Don't try to manage workers yourself - let the orchestrator handle it
+❌ Don't skip the planning step for complex projects
+❌ Don't micromanage priorities - Claude sets them appropriately
+
+**The key principle:** Trust Claude to use Klauss effectively once it has good requirements.
+
 ## 🎛️ Monitoring
 
 ### Real-Time Dashboard
