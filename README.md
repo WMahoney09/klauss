@@ -1,5 +1,5 @@
 # 🏗️ This is a Work In Progress 🚧
-# Meet Klauss 🐙
+# Meet Klauss 🦑
 **Claude's friend who orchestrates multi-agent workflows.**
 
 [![CI](https://github.com/WMahoney09/klauss/actions/workflows/ci.yml/badge.svg)](https://github.com/WMahoney09/klauss/actions/workflows/ci.yml)
@@ -100,7 +100,7 @@ Claude Code: 🚀 Starting 6 workers...
 - **🚀 Faster execution** - Complex tasks complete in parallel
 - **🧠 Better decomposition** - Claude breaks work into optimal sub-tasks
 - **👀 Visibility** - Real-time dashboard shows parallel progress
-- **🐙 Automatic coordination** - Workers sync through shared queue and conventions
+- **🦑 Automatic coordination** - Workers sync through shared queue and conventions
 - **🎯 Consistent output** - Shared context ensures workers follow same patterns
 - **📊 Task dependencies** - Define execution order with automatic dependency resolution
 - **🔁 Auto-retry** - Tasks retry on failure with error context for learning
