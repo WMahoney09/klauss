@@ -1,4 +1,4 @@
-# 🏗️ This is a Work In Progress 🚧
+# 🏗️ ~~This is a Work In Progress~~ Just use [Agent Teams](https://code.claude.com/docs/en/agent-teams) 🚧
 # Meet Klauss 🦑
 **Claude's friend who orchestrates multi-agent workflows.**
 
